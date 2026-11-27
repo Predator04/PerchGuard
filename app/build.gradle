@@ -7,6 +7,11 @@ repositories {
     mavenCentral()
 }
 
+def apiProps = new Properties()
+def apiPropsFile = rootProject.file('apikey.properties')
+if (apiPropsFile.exists()) { apiProps.load(apiPropsFile.newDataInputStream()) }
+def authToken = apiProps.getProperty('AUTH_TOKEN', '')
+
 android {
     namespace 'com.perchguard.app'
     compileSdk 34
@@ -21,6 +26,7 @@ android {
         buildConfigField "String", "VERSION_NAME",        "\"0.2.0\""
         buildConfigField "String", "GH_REPO",             "\"Predator04/PerchGuard\""
         buildConfigField "String", "UPDATE_ASSET_PREFIX", "\"PerchGuard-child-v\""
+        buildConfigField "String", "AUTH_TOKEN", "\"${authToken}\""
     }
 
     buildFeatures { buildConfig true }

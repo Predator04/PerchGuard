@@ -6,3 +6,6 @@ local.properties
 relay/policy.json
 relay/uploads/
 relay/__pycache__/
+
+apikey.properties
+parent/apikey.properties

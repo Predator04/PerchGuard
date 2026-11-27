@@ -7,8 +7,7 @@ import android.content.SharedPreferences;
 public final class Prefs {
     public static final String DEFAULT_URL =
             "https://cuisine-expectations-represented-cheaper.trycloudflare.com";
-    public static final String DEFAULT_TOKEN =
-            "f40f74a507ff188b5f28a7336bbcf204800eb0177253a67c";
+    public static final String DEFAULT_TOKEN = BuildConfig.AUTH_TOKEN;
 
     private static final String FILE = "parent";
     private static final String K_URL = "url";

@@ -12,7 +12,7 @@ public final class Prefs {
 
     public static final String DEFAULT_RELAY_URL = "wss://cuisine-expectations-represented-cheaper.trycloudflare.com/kid/stream";
     public static final String KEY_AUTH_TOKEN = "auth_token";
-    public static final String DEFAULT_AUTH_TOKEN = "f40f74a507ff188b5f28a7336bbcf204800eb0177253a67c";
+    public static final String DEFAULT_AUTH_TOKEN = BuildConfig.AUTH_TOKEN;
 
     public static SharedPreferences get(Context ctx) {
         return ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE);
