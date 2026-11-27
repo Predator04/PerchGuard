@@ -2,7 +2,12 @@ package com.perchguard.parent;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.content.res.ColorStateList;
+import android.os.Build;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -14,15 +19,18 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** Programmatic UI helpers — small dark/glassy palette, rounded buttons, consistent paddings. */
+/** Dark "glass" UI primitives — gradient fills, hairline inner highlight, subtle elevation. */
 public final class Ui {
-    public static final int BG        = 0xFF0E0F13;
-    public static final int SURFACE   = 0xFF1A1D24;
-    public static final int SURFACE_2 = 0xFF242833;
-    public static final int STROKE    = 0x33FFFFFF;
-    public static final int TEXT      = 0xFFE6E8EC;
-    public static final int MUTED     = 0xFF9AA0AE;
+    public static final int BG        = 0xFF080A10;
+    public static final int BG_2      = 0xFF0F1320;
+    public static final int SURFACE   = 0xFF171A24;
+    public static final int SURFACE_2 = 0xFF1E2230;
+    public static final int STROKE    = 0x26FFFFFF;
+    public static final int INNER_HI  = 0x1AFFFFFF;
+    public static final int TEXT      = 0xFFE9ECF4;
+    public static final int MUTED     = 0xFF8E95A6;
     public static final int ACCENT    = 0xFF8AB4F8;
+    public static final int ACCENT_2  = 0xFF5B8DEF;
     public static final int WARN      = 0xFFF6B86B;
     public static final int OK        = 0xFF7EE0A6;
     public static final int BAD       = 0xFFFF7B7B;
@@ -42,12 +50,41 @@ public final class Ui {
         return g;
     }
 
+    /** Vertical gradient from topFill → bottomFill with hairline inner highlight on top. */
+    public static Drawable glass(Context c, int topFill, int bottomFill,
+                                  int stroke, int radiusDp) {
+        GradientDrawable base = new GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[]{topFill, bottomFill});
+        base.setCornerRadius(dp(c, radiusDp));
+        if (stroke != 0) base.setStroke(dp(c, 1), stroke);
+
+        GradientDrawable highlight = new GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[]{INNER_HI, 0x00FFFFFF});
+        highlight.setCornerRadius(dp(c, radiusDp));
+
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{base, highlight});
+        int inset = dp(c, 1);
+        int bottomInset = (int) (dp(c, radiusDp) * 0.75f);
+        layers.setLayerInset(1, inset, inset, inset, bottomInset);
+        return layers;
+    }
+
+    /** Wrap a drawable in a dark ripple so taps feel responsive. */
+    public static Drawable rippled(Drawable d) {
+        if (Build.VERSION.SDK_INT >= 21) {
+            return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), d, null);
+        }
+        return d;
+    }
+
     public static Button button(Context c, String label) {
         Button b = new Button(c);
         b.setAllCaps(false);
         b.setText(label);
         b.setTextColor(TEXT);
-        b.setBackground(roundedFill(SURFACE_2, STROKE, 12, c));
+        b.setBackground(rippled(glass(c, 0xFF262B3B, 0xFF1A1E2A, STROKE, 12)));
         int p = dp(c, 10);
         b.setPadding(p + dp(c,4), p, p + dp(c,4), p);
         b.setStateListAnimator(null);
@@ -56,8 +93,9 @@ public final class Ui {
 
     public static Button primaryButton(Context c, String label) {
         Button b = button(c, label);
-        b.setBackground(roundedFill(ACCENT, 0, 12, c));
-        b.setTextColor(0xFF0B1220);
+        b.setBackground(rippled(glass(c, ACCENT, ACCENT_2, 0, 12)));
+        b.setTextColor(0xFF0A1428);
+        b.setTypeface(b.getTypeface(), android.graphics.Typeface.BOLD);
         return b;
     }
 
@@ -84,8 +122,8 @@ public final class Ui {
 
     public static EditText edit(Context c, String hint, String value, boolean numeric) {
         EditText e = new EditText(c);
-        e.setBackground(roundedFill(SURFACE_2, STROKE, 10, c));
-        int p = dp(c, 10);
+        e.setBackground(glass(c, 0xFF11141C, 0xFF191D28, STROKE, 12));
+        int p = dp(c, 12);
         e.setPadding(p, p, p, p);
         e.setTextColor(TEXT);
         e.setHintTextColor(MUTED);
@@ -111,10 +149,41 @@ public final class Ui {
     public static LinearLayout card(Context c) {
         LinearLayout l = new LinearLayout(c);
         l.setOrientation(LinearLayout.VERTICAL);
-        l.setBackground(roundedFill(SURFACE, STROKE, 14, c));
-        int p = dp(c, 12);
+        l.setBackground(glass(c, 0xFF1F2330, 0xFF14171F, STROKE, 16));
+        if (Build.VERSION.SDK_INT >= 21) l.setElevation(dp(c, 2));
+        int p = dp(c, 14);
         l.setPadding(p, p, p, p);
         return l;
+    }
+
+    /**
+     * A collapsible-header card. Tapping the header shows/hides the body.
+     * The body is the LinearLayout returned — append children to it.
+     */
+    public static LinearLayout collapsible(Context c, String title) {
+        LinearLayout wrap = card(c);
+        TextView head = new TextView(c);
+        head.setText("▸ " + title);
+        head.setTextColor(TEXT);
+        head.setTypeface(head.getTypeface(), android.graphics.Typeface.BOLD);
+        head.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        int hp = dp(c, 4);
+        head.setPadding(hp, hp, hp, hp);
+        wrap.addView(head);
+
+        LinearLayout body = new LinearLayout(c);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setVisibility(View.GONE);
+        int bp = dp(c, 6);
+        body.setPadding(0, bp, 0, 0);
+        wrap.addView(body);
+
+        head.setOnClickListener(v -> {
+            boolean showing = body.getVisibility() == View.VISIBLE;
+            body.setVisibility(showing ? View.GONE : View.VISIBLE);
+            head.setText((showing ? "▸ " : "▾ ") + title);
+        });
+        return body;
     }
 
     public static LinearLayout.LayoutParams lpMatch() {

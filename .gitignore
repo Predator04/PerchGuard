@@ -1,6 +1,8 @@
 app/build/
+parent/app/build/
 .gradle/
 local.properties
 *.keystore
 relay/policy.json
+relay/uploads/
 relay/__pycache__/

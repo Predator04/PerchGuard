@@ -48,6 +48,11 @@ public final class Events {
         } catch (JSONException e) { return "{\"evt\":\"battery\"}"; }
     }
 
+    /** Build and ship an ack event over the ScreenService websocket, if open. */
+    public static void ackAsync(String cmd, boolean ok, String err) {
+        ScreenService.sendEvent(ack(cmd, ok, err));
+    }
+
     public static String ack(String cmd, boolean ok, String err) {
         try {
             JSONObject o = new JSONObject();

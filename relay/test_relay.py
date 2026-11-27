@@ -188,6 +188,41 @@ async def run_tests(port):
         st = json.loads(b)
         check("block appears in policy", "com.added.app" in st["policy"].get("blocked", []))
 
+        # 12b. /api/apk POST (raw bytes) stores + tells child via install_apk
+        async def wait_install():
+            try:
+                for _ in range(8):
+                    m = await asyncio.wait_for(kid_ws.receive(), timeout=2)
+                    if m.type == aiohttp.WSMsgType.TEXT and '"install_apk"' in m.data:
+                        return json.loads(m.data)
+            except Exception:
+                return None
+        waiter = asyncio.create_task(wait_install())
+        fake_apk = b"PK\x03\x04FAKE-APK-BYTES"
+        def _apk_post():
+            req = urllib.request.Request(base + "/api/apk", method="POST", data=fake_apk)
+            req.add_header("Authorization", "Bearer " + TOKEN)
+            req.add_header("Content-Type", "application/vnd.android.package-archive")
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status, r.read()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read()
+        got = await loop.run_in_executor(None, _apk_post)
+        check("apk POST -> 200", got[0] == 200, f"got {got[0]}")
+        cmd = await waiter
+        check("kid received install_apk", cmd and cmd.get("url", "").startswith("http")
+              and "/api/apk" in cmd.get("url", ""))
+
+        # 12c. GET /api/apk returns the bytes we posted
+        s, b = http("GET", base + "/api/apk", token=TOKEN)
+        check("apk GET -> 200", s == 200, f"got {s}")
+        check("apk GET returns stored bytes", b == fake_apk, f"got {b[:40]!r}")
+
+        # 12d. GET /api/apk without token -> 401
+        s, _ = http("GET", base + "/api/apk")
+        check("apk GET w/o token -> 401", s == 401, f"got {s}")
+
         # 13. second kid connection supersedes first
         kid_ws2 = await sess.ws_connect(ws_base + "/kid/stream", headers=headers, timeout=5)
         # drain messages on old socket until we see the server-initiated close
@@ -225,6 +260,10 @@ def main():
     # Remove any pre-existing policy.json so tests are clean
     pf = os.path.join(HERE, "policy.json")
     if os.path.exists(pf): os.remove(pf)
+    uploaded = os.path.join(HERE, "uploads", "app.apk")
+    if os.path.exists(uploaded):
+        try: os.remove(uploaded)
+        except OSError: pass
     proc = subprocess.Popen([sys.executable, os.path.join(HERE, "relay.py")],
                             env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:

@@ -38,15 +38,18 @@ public class MainActivity extends Activity {
     private static final int REQ_CAPTURE = 1001;
     private static final int REQ_NOTIF = 1002;
 
-    private static final int COL_BG = Color.parseColor("#0f1216");
-    private static final int COL_CARD = Color.parseColor("#1a1f26");
-    private static final int COL_CARD_EDGE = Color.parseColor("#262c35");
-    private static final int COL_TEXT = Color.parseColor("#f2f4f8");
-    private static final int COL_MUTED = Color.parseColor("#8a93a2");
-    private static final int COL_OK = Color.parseColor("#3ddc84");
-    private static final int COL_PENDING = Color.parseColor("#ffb020");
-    private static final int COL_ACCENT = Color.parseColor("#4c8bff");
-    private static final int COL_ACCENT_DIM = Color.parseColor("#2b3d61");
+    private static final int COL_BG = Color.parseColor("#080A10");
+    private static final int COL_BG_2 = Color.parseColor("#0F1320");
+    private static final int COL_CARD = Color.parseColor("#1F2330");
+    private static final int COL_CARD_2 = Color.parseColor("#14171F");
+    private static final int COL_CARD_EDGE = 0x26FFFFFF;
+    private static final int COL_TEXT = Color.parseColor("#E9ECF4");
+    private static final int COL_MUTED = Color.parseColor("#8E95A6");
+    private static final int COL_OK = Color.parseColor("#7EE0A6");
+    private static final int COL_PENDING = Color.parseColor("#F6B86B");
+    private static final int COL_ACCENT = Color.parseColor("#8AB4F8");
+    private static final int COL_ACCENT_DIM = Color.parseColor("#2B3D61");
+    private static final int COL_INNER_HI = 0x1AFFFFFF;
 
     private MediaProjectionManager mpm;
     private StepRow rowCapture, rowAccessibility, rowUsage, rowRelay;
@@ -71,7 +74,10 @@ public class MainActivity extends Activity {
 
     private View buildUi() {
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(COL_BG);
+        GradientDrawable bgGrad = new GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[]{COL_BG_2, COL_BG});
+        scroll.setBackground(bgGrad);
         scroll.setFillViewport(true);
 
         LinearLayout root = new LinearLayout(this);
@@ -154,6 +160,24 @@ public class MainActivity extends Activity {
         });
         root.addView(stopLink);
 
+        TextView updateLink = new TextView(this);
+        updateLink.setText("Check for updates");
+        updateLink.setTextColor(COL_MUTED);
+        updateLink.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        updateLink.setGravity(Gravity.CENTER);
+        updateLink.setPadding(dp(16), dp(4), dp(16), dp(4));
+        updateLink.setOnClickListener(v -> checkForUpdate(updateLink));
+        root.addView(updateLink);
+
+        TextView versionLine = new TextView(this);
+        versionLine.setText("PerchGuard child v" + BuildConfig.VERSION_NAME
+            + " (code " + BuildConfig.VERSION_CODE + ")");
+        versionLine.setTextColor(COL_MUTED);
+        versionLine.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        versionLine.setGravity(Gravity.CENTER);
+        versionLine.setPadding(dp(16), dp(2), dp(16), dp(20));
+        root.addView(versionLine);
+
         scroll.addView(root);
         return scroll;
     }
@@ -188,11 +212,8 @@ public class MainActivity extends Activity {
     private View buildRelayBody() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(COL_CARD);
-        bg.setCornerRadius(dp(12));
-        bg.setStroke(dp(1), COL_CARD_EDGE);
-        box.setBackground(bg);
+        box.setBackground(glassCard(14));
+        if (Build.VERSION.SDK_INT >= 21) box.setElevation(dp(2));
         int pad = dp(14);
         box.setPadding(pad, pad, pad, pad);
 
@@ -419,11 +440,8 @@ public class MainActivity extends Activity {
             LinearLayout card = new LinearLayout(MainActivity.this);
             card.setOrientation(LinearLayout.HORIZONTAL);
             card.setGravity(Gravity.CENTER_VERTICAL);
-            GradientDrawable bg = new GradientDrawable();
-            bg.setColor(COL_CARD);
-            bg.setCornerRadius(dp(14));
-            bg.setStroke(dp(1), COL_CARD_EDGE);
-            card.setBackground(bg);
+            card.setBackground(glassCard(16));
+            if (Build.VERSION.SDK_INT >= 21) card.setElevation(dp(2));
             int pad = dp(14);
             card.setPadding(pad, pad, pad, pad);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -504,5 +522,47 @@ public class MainActivity extends Activity {
 
     private int dp(int d) {
         return (int) Math.round(d * getResources().getDisplayMetrics().density);
+    }
+
+    private android.graphics.drawable.Drawable glassCard(int radiusDp) {
+        GradientDrawable base = new GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[]{COL_CARD, COL_CARD_2});
+        base.setCornerRadius(dp(radiusDp));
+        base.setStroke(dp(1), COL_CARD_EDGE);
+
+        GradientDrawable hi = new GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[]{COL_INNER_HI, 0x00FFFFFF});
+        hi.setCornerRadius(dp(radiusDp));
+
+        android.graphics.drawable.LayerDrawable l =
+            new android.graphics.drawable.LayerDrawable(
+                new android.graphics.drawable.Drawable[]{base, hi});
+        int inset = dp(1);
+        int bottomInset = (int) (dp(radiusDp) * 0.75f);
+        l.setLayerInset(1, inset, inset, inset, bottomInset);
+        return l;
+    }
+
+    private void checkForUpdate(TextView link) {
+        link.setText("Checking…");
+        new UpdateChecker(this).check(new UpdateChecker.Listener() {
+            @Override public void onNoUpdate(int installed, int latest) {
+                link.setText("Up to date (v" + BuildConfig.VERSION_NAME + ")");
+            }
+            @Override public void onUpdateAvailable(int latest, String tag,
+                                                     String assetUrl, String assetName) {
+                link.setText("Update " + tag + " available — tap to install");
+                link.setTextColor(COL_ACCENT);
+                link.setOnClickListener(v ->
+                    new UpdateChecker(MainActivity.this)
+                        .downloadAndInstall(assetUrl, assetName, MainActivity.this));
+            }
+            @Override public void onError(String message) {
+                link.setText("Update check failed");
+                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+        });
     }
 }

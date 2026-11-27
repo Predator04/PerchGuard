@@ -1,6 +1,7 @@
 package com.perchguard.parent;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
@@ -84,13 +85,48 @@ public class SettingsActivity extends Activity {
         Button reset = Ui.button(this, "Reset to defaults");
         LinearLayout.LayoutParams rLp = Ui.lpMatch();
         rLp.topMargin = Ui.dp(this, 10);
-        rLp.bottomMargin = Ui.dp(this, 20);
         reset.setLayoutParams(rLp);
         reset.setOnClickListener(v -> {
             urlField.setText(Prefs.DEFAULT_URL);
             tokenField.setText(Prefs.DEFAULT_TOKEN);
         });
         root.addView(reset);
+
+        LinearLayout tools = Ui.card(this);
+        LinearLayout.LayoutParams toLp = Ui.lpMatch();
+        toLp.topMargin = Ui.dp(this, 18);
+        tools.setLayoutParams(toLp);
+
+        tools.addView(Ui.label(this, "Install + update"));
+        tools.addView(Ui.muted(this,
+            "Update this parent app, or push an APK to the child device."));
+
+        Button update = Ui.button(this, "Check for updates");
+        LinearLayout.LayoutParams upLp = Ui.lpMatch();
+        upLp.topMargin = Ui.dp(this, 10);
+        update.setLayoutParams(upLp);
+        update.setOnClickListener(v ->
+            startActivity(new Intent(this, UpdateActivity.class)));
+        tools.addView(update);
+
+        Button push = Ui.button(this, "Push APK to child");
+        LinearLayout.LayoutParams pshLp = Ui.lpMatch();
+        pshLp.topMargin = Ui.dp(this, 8);
+        push.setLayoutParams(pshLp);
+        push.setOnClickListener(v ->
+            startActivity(new Intent(this, PushApkActivity.class)));
+        tools.addView(push);
+
+        root.addView(tools);
+
+        TextView ver = Ui.muted(this,
+            "PerchGuard parent v" + BuildConfig.VERSION_NAME
+            + " (code " + BuildConfig.VERSION_CODE + ")");
+        LinearLayout.LayoutParams vLp = Ui.lpMatch();
+        vLp.topMargin = Ui.dp(this, 14);
+        vLp.bottomMargin = Ui.dp(this, 20);
+        ver.setLayoutParams(vLp);
+        root.addView(ver);
 
         sv.addView(root);
         setContentView(sv);

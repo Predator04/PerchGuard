@@ -17,6 +17,9 @@ Transports:
   POST /api/action/type   body: {"text":"..."}
   POST /api/action/block  body: {"package":"...","block":true|false}
   POST /api/action/bedtime body: {"start":"HH:MM","end":"HH:MM","enabled":true}
+  POST /api/apk           body: raw APK bytes (application/vnd.android.package-archive)
+                           OR  JSON {"url":"https://..."} — relay prefetches and tells child
+  GET  /api/apk           serves the stored APK (child downloads this after install_apk cmd)
 
 Auth: if KIDWATCH_TOKEN is set, all routes require it.
   child WS   : Authorization: Bearer <token>
@@ -143,6 +146,42 @@ async def index(request):
 
 async def app_apk(request):
     return web.FileResponse(os.path.join(HERE, "app.apk"))
+
+
+UPLOADS_DIR = os.path.join(HERE, "uploads")
+UPLOADED_APK = os.path.join(UPLOADS_DIR, "app.apk")
+# Safety ceiling: refuse APK uploads larger than this. Easily tuned, keeps us
+# from OOMing on a malicious / mistaken giant upload.
+MAX_APK_BYTES = 200 * 1024 * 1024
+
+
+def _public_base(request):
+    # Prefer the Cloudflare-tunnelled forwarded host so the child uses the
+    # outside URL, not the relay's private 0.0.0.0:8899 bind.
+    host = request.headers.get("X-Forwarded-Host") or request.host
+    proto = request.headers.get("X-Forwarded-Proto") \
+            or ("https" if request.secure else "http")
+    return f"{proto}://{host}"
+
+
+async def _fetch_to_local(url):
+    """Best-effort: download a remote APK into our local uploads folder so a
+    later child reconnect can also use /api/apk."""
+    import aiohttp as _aio
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    tmp = UPLOADED_APK + ".part"
+    total = 0
+    async with _aio.ClientSession() as sess:
+        async with sess.get(url, timeout=_aio.ClientTimeout(total=120)) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"HTTP {resp.status} from {url}")
+            with open(tmp, "wb") as f:
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    total += len(chunk)
+                    if total > MAX_APK_BYTES:
+                        raise RuntimeError("remote apk too large")
+                    f.write(chunk)
+    os.replace(tmp, UPLOADED_APK)
 
 
 async def kid_ws_handler(request):
@@ -413,6 +452,71 @@ async def api_bedtime(request):
 
 
 @api_auth
+async def api_apk_get(request):
+    if not os.path.exists(UPLOADED_APK):
+        return web.json_response({"error": "no_apk"}, status=404)
+    return web.FileResponse(UPLOADED_APK, headers={
+        "Content-Type": "application/vnd.android.package-archive",
+        "Cache-Control": "no-store",
+    })
+
+
+@api_auth
+async def api_apk_post(request):
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    ct = (request.content_type or "").lower()
+    source_url = None
+    if ct.startswith("application/json"):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "bad_json"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "bad_shape"}, status=400)
+        src = body.get("url")
+        if not isinstance(src, str) or not src:
+            return web.json_response({"error": "missing_field",
+                                      "field": "url"}, status=400)
+        source_url = src
+        try:
+            await _fetch_to_local(src)
+        except Exception as e:
+            print(f"[relay] prefetch of {src} failed: {e}")
+    else:
+        clen = request.content_length or 0
+        if clen > MAX_APK_BYTES:
+            return web.json_response({"error": "too_large",
+                                      "limit": MAX_APK_BYTES}, status=413)
+        total = 0
+        tmp = UPLOADED_APK + ".part"
+        try:
+            with open(tmp, "wb") as f:
+                async for chunk in request.content.iter_chunked(64 * 1024):
+                    total += len(chunk)
+                    if total > MAX_APK_BYTES:
+                        f.close()
+                        try: os.unlink(tmp)
+                        except OSError: pass
+                        return web.json_response({"error": "too_large",
+                                                  "limit": MAX_APK_BYTES}, status=413)
+                    f.write(chunk)
+            os.replace(tmp, UPLOADED_APK)
+        except Exception as e:
+            try: os.unlink(tmp)
+            except OSError: pass
+            return web.json_response({"error": "write_failed",
+                                      "detail": str(e)}, status=500)
+
+    download_url = source_url or (
+        _public_base(request) + "/api/apk?token=" + TOKEN)
+    ok = await send_to_kid({"cmd": "install_apk", "url": download_url})
+    return web.json_response({"ok": True,
+                              "stored": os.path.exists(UPLOADED_APK),
+                              "url": download_url,
+                              "child_notified": ok})
+
+
+@api_auth
 async def api_limits(request):
     global POLICY
     body = await _read_body(request)
@@ -459,6 +563,8 @@ app.router.add_post("/api/action/type", api_type)
 app.router.add_post("/api/action/block", api_block)
 app.router.add_post("/api/action/bedtime", api_bedtime)
 app.router.add_post("/api/action/limits", api_limits)
+app.router.add_get("/api/apk",  api_apk_get)
+app.router.add_post("/api/apk", api_apk_post)
 
 if __name__ == "__main__":
     port = int(os.environ.get("KIDWATCH_PORT", "8899"))
