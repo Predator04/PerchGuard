@@ -10,7 +10,9 @@ public final class Prefs {
     public static final String KEY_USAGE_DATE = "usage_date";
     public static final String KEY_USAGE_JSON = "usage_json";
 
-    public static final String DEFAULT_RELAY_URL = "ws://192.168.1.8:8899/kid/stream";
+    public static final String DEFAULT_RELAY_URL = "wss://cuisine-expectations-represented-cheaper.trycloudflare.com/kid/stream";
+    public static final String KEY_AUTH_TOKEN = "auth_token";
+    public static final String DEFAULT_AUTH_TOKEN = "f40f74a507ff188b5f28a7336bbcf204800eb0177253a67c";
 
     public static SharedPreferences get(Context ctx) {
         return ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE);
@@ -22,6 +24,14 @@ public final class Prefs {
 
     public static void setRelayUrl(Context ctx, String url) {
         get(ctx).edit().putString(KEY_RELAY_URL, url).apply();
+    }
+
+    public static String authToken(Context ctx) {
+        return get(ctx).getString(KEY_AUTH_TOKEN, DEFAULT_AUTH_TOKEN);
+    }
+
+    public static void setAuthToken(Context ctx, String token) {
+        get(ctx).edit().putString(KEY_AUTH_TOKEN, token).apply();
     }
 
     private Prefs() {}

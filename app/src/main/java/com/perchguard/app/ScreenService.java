@@ -220,7 +220,9 @@ public class ScreenService extends Service {
         if (webSocket != null || connecting) return;
         if (relayUrl == null || relayUrl.isEmpty()) return;
         connecting = true;
-        Request req = new Request.Builder().url(relayUrl).build();
+        Request req = new Request.Builder().url(relayUrl)
+            .header("Authorization", "Bearer " + Prefs.authToken(this))
+            .build();
         try {
             webSocket = client.newWebSocket(req, new WebSocketListener() {
                 @Override public void onOpen(WebSocket ws, Response response) {
