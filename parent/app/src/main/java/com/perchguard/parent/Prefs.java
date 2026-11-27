@@ -6,7 +6,7 @@ import android.content.SharedPreferences;
 /** Persisted relay URL + bearer token. Defaults = the deployed Cloudflare tunnel. */
 public final class Prefs {
     public static final String DEFAULT_URL =
-            "https://cuisine-expectations-represented-cheaper.trycloudflare.com";
+            "https://perchguard.cryptoagentkit.com";
     public static final String DEFAULT_TOKEN = BuildConfig.AUTH_TOKEN;
 
     private static final String FILE = "parent";

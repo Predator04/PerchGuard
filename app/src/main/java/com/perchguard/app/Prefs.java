@@ -10,7 +10,7 @@ public final class Prefs {
     public static final String KEY_USAGE_DATE = "usage_date";
     public static final String KEY_USAGE_JSON = "usage_json";
 
-    public static final String DEFAULT_RELAY_URL = "wss://cuisine-expectations-represented-cheaper.trycloudflare.com/kid/stream";
+    public static final String DEFAULT_RELAY_URL = "wss://perchguard.cryptoagentkit.com/kid/stream";
     public static final String KEY_AUTH_TOKEN = "auth_token";
     public static final String DEFAULT_AUTH_TOKEN = BuildConfig.AUTH_TOKEN;
 
