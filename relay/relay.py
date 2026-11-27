@@ -51,6 +51,7 @@ STATE = {
     "usage": {},             # last usage_daily
     "battery": {},           # last battery event
     "bedtime_active": False,
+    "last_seen_ts": 0.0,     # last time we received anything from the child
     "events": [],            # tail of recent events (max 200)
     "screenshot_waiters": [],  # list[Future], resolved when next frame arrives
 }
@@ -157,6 +158,7 @@ async def kid_ws_handler(request):
     await ws.send_str(json.dumps({"cmd": "policy", **snap}))
     try:
         async for msg in ws:
+            STATE["last_seen_ts"] = time.time()
             if msg.type == WSMsgType.BINARY:
                 STATE["frame"] = bytearray(msg.data)
                 STATE["frame_ts"] = time.time()
@@ -231,6 +233,7 @@ def _state_dict():
         "bedtime_active": STATE["bedtime_active"],
         "kid_connected": STATE["kid_ws"] is not None and not STATE["kid_ws"].closed,
         "frame_ts": STATE["frame_ts"],
+        "last_seen_ts": STATE["last_seen_ts"],
         "policy": POLICY,
         "events": STATE["events"][-40:],
     }

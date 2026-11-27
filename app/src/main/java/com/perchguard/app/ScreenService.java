@@ -373,6 +373,10 @@ public class ScreenService extends Service {
         if (svc != null) svc.sendOneFrame = true;
     }
 
+    public static boolean isRunning() {
+        return instance != null;
+    }
+
     private Notification buildNotification() {
         NotificationManager nm =
             (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);

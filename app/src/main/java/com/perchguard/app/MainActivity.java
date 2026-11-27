@@ -64,8 +64,24 @@ public class MainActivity extends Activity {
         Button saveUrl = new Button(this);
         saveUrl.setText("Save relay URL");
         saveUrl.setOnClickListener(v -> {
-            Prefs.setRelayUrl(this, relayField.getText().toString().trim());
-            Toast.makeText(this, "Saved — restart monitoring to reconnect", Toast.LENGTH_SHORT).show();
+            String url = relayField.getText().toString().trim();
+            if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+                Toast.makeText(this, "URL must start with ws:// or wss://",
+                    Toast.LENGTH_LONG).show();
+                return;
+            }
+            Prefs.setRelayUrl(this, url);
+            // Only kick the service if it's already running — starting a fresh
+            // mediaProjection FGS without user consent would crash on API 34+.
+            if (ScreenService.isRunning()) {
+                Intent kick = new Intent(this, ScreenService.class);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(kick);
+                else startService(kick);
+                Toast.makeText(this, "Saved — reconnecting", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "Saved — start monitoring to connect",
+                    Toast.LENGTH_SHORT).show();
+            }
         });
 
         Button start = new Button(this);
