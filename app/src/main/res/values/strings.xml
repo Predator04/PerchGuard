@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PerchGuard</string>
+    <string name="accessibility_service_desc">PerchGuard Control — lets a parent inject taps and swipes, enforce app blocks, and apply bedtime limits. Required for remote help and parental controls.</string>
+    <string name="accessibility_service_summary">Parental remote control and app blocking</string>
+</resources>

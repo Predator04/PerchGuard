@@ -1,0 +1,290 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PerchGuard</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0b0d10; margin:0; color:#eef1f5; font-family:system-ui,-apple-system,sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:14px 18px; border-bottom:1px solid #1e242c; }
+  header h1 { font-size:18px; margin:0; font-weight:600; letter-spacing:.2px; }
+  header .status { font-size:12px; color:#8691a0; }
+  main { display:grid; grid-template-columns: minmax(300px, 420px) 1fr; gap:18px; padding:18px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background:#131820; border:1px solid #1e242c; border-radius:10px; padding:14px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; color:#8691a0; margin:0 0 10px; letter-spacing:.8px; }
+  .viewbox { display:flex; flex-direction:column; align-items:center; gap:10px; }
+  #view { width:100%; max-width:380px; border-radius:8px; background:#000; cursor:crosshair; }
+  button, input, select { font: inherit; color:inherit; background:#1a222c; border:1px solid #273040;
+    border-radius:6px; padding:6px 10px; }
+  button { cursor:pointer; }
+  button:hover { background:#222d3a; }
+  button.primary { background:#2b5bd7; border-color:#2b5bd7; }
+  button.primary:hover { background:#3568e3; }
+  button.danger { background:#8a2222; border-color:#8a2222; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .kv { font-size:13px; color:#b8c0cc; }
+  .kv b { color:#eef1f5; font-weight:600; }
+  .list { max-height:360px; overflow-y:auto; margin-top:6px; }
+  .pkg { display:grid; grid-template-columns: 1fr 70px 80px 70px; gap:8px; align-items:center;
+    padding:6px 0; border-bottom:1px solid #1e242c; font-size:13px; }
+  .pkg code { color:#8be0a1; font-family:ui-monospace,monospace; word-break:break-all; }
+  .pkg input { width:60px; }
+  .events { font-family:ui-monospace,monospace; font-size:11px; color:#b8c0cc; max-height:220px;
+    overflow-y:auto; white-space:pre-wrap; background:#0e1319; border-radius:6px; padding:8px; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+    background:#1a222c; border:1px solid #273040; color:#b8c0cc; }
+  .pill.live { background:#15402a; border-color:#1f5a3a; color:#8be0a1; }
+  .pill.down { background:#3a1f1f; border-color:#5a2a2a; color:#f4a3a3; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PerchGuard</h1>
+  <span id="kidStatus" class="pill down">child offline</span>
+  <span id="wsStatus" class="status">dashboard disconnected</span>
+  <span id="fg" class="status"></span>
+  <span id="batt" class="status"></span>
+  <span id="bedtime" class="status"></span>
+</header>
+
+<main>
+  <section class="panel viewbox">
+    <h2>Live view</h2>
+    <img id="view" alt="live view">
+    <div class="row">
+      <button id="watchBtn" class="primary">Watch now</button>
+      <button id="stopBtn">Stop</button>
+      <button id="shotBtn">Screenshot</button>
+      <button id="lockBtn" class="danger">Lock now</button>
+    </div>
+    <div class="row">
+      <button data-key="home">Home</button>
+      <button data-key="back">Back</button>
+      <button data-key="recents">Recents</button>
+      <button data-key="notifications">Notifications</button>
+    </div>
+    <div class="row">
+      <input id="typeField" placeholder="type into focused field…" style="flex:1; min-width:180px;">
+      <button id="typeBtn">Send</button>
+    </div>
+    <div class="kv">Tap the image to send a tap. Native coords <b>1116×2484</b>.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Policy</h2>
+
+    <div class="row" style="margin-bottom:10px;">
+      <input id="newPkg" placeholder="com.example.app" style="flex:1; min-width:180px;">
+      <input id="newLimit" type="number" min="0" placeholder="min/day" style="width:90px;">
+      <button id="addPkg">Add</button>
+    </div>
+    <div id="pkgs" class="list"></div>
+
+    <h2 style="margin-top:14px;">Bedtime</h2>
+    <div class="row">
+      <label class="kv">Start <input id="btStart" type="time"></label>
+      <label class="kv">End <input id="btEnd" type="time"></label>
+      <label class="kv"><input id="btEnabled" type="checkbox"> enabled</label>
+      <button id="saveBedtime">Save bedtime</button>
+    </div>
+
+    <h2 style="margin-top:14px;">Daily total</h2>
+    <div class="row">
+      <label class="kv">Total minutes <input id="totalMinutes" type="number" min="0" style="width:90px;"></label>
+      <button id="saveTotal">Save</button>
+    </div>
+
+    <h2 style="margin-top:14px;">Usage today</h2>
+    <div id="usage" class="kv"></div>
+
+    <h2 style="margin-top:14px;">Recent events</h2>
+    <div id="events" class="events"></div>
+  </section>
+</main>
+
+<script>
+const NATIVE_W = 1116, NATIVE_H = 2484;
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const authHeaders = TOKEN ? { "Authorization": "Bearer " + TOKEN } : {};
+const tokenQS = TOKEN ? ("?token=" + encodeURIComponent(TOKEN)) : "";
+
+const img = document.getElementById("view");
+const kidStatus = document.getElementById("kidStatus");
+const wsStatus = document.getElementById("wsStatus");
+const fgEl = document.getElementById("fg");
+const battEl = document.getElementById("batt");
+const bedtimeEl = document.getElementById("bedtime");
+const eventsEl = document.getElementById("events");
+const pkgsEl = document.getElementById("pkgs");
+const usageEl = document.getElementById("usage");
+
+let ws = null, url = null, policy = {blocked:[], limits:{}, total_minutes:0, bedtime:{start:"",end:"",enabled:false}};
+let lastUsage = {by_pkg:{}, total_minutes:0};
+
+function connect() {
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
+    + location.host + "/parent/view" + tokenQS);
+  ws.binaryType = "blob";
+  ws.onopen = () => wsStatus.textContent = "dashboard live";
+  ws.onmessage = (e) => {
+    if (typeof e.data === "string") {
+      let obj; try { obj = JSON.parse(e.data); } catch { return; }
+      if (obj.type === "state") applyState(obj.state);
+      else if (obj.type === "event") applyEvent(obj.event);
+    } else {
+      if (url) URL.revokeObjectURL(url);
+      url = URL.createObjectURL(e.data);
+      img.src = url;
+    }
+  };
+  ws.onclose = () => { wsStatus.textContent = "dashboard reconnecting…"; setTimeout(connect, 2000); };
+  ws.onerror = () => ws.close();
+}
+
+function applyState(s) {
+  kidStatus.textContent = s.kid_connected ? "child online" : "child offline";
+  kidStatus.className = "pill " + (s.kid_connected ? "live" : "down");
+  if (s.foreground) fgEl.textContent = "foreground: " + s.foreground;
+  if (s.battery && s.battery.level != null)
+    battEl.textContent = "battery: " + s.battery.level + "%" + (s.battery.charging ? " ⚡" : "");
+  bedtimeEl.textContent = s.bedtime_active ? "bedtime: active" : "";
+  if (s.policy) { policy = s.policy; renderPolicy(); }
+  if (s.usage) { lastUsage = s.usage; renderUsage(); }
+  (s.events || []).forEach(appendEvent);
+}
+
+function applyEvent(evt) {
+  appendEvent(evt);
+  if (evt.evt === "foreground") fgEl.textContent = "foreground: " + evt.pkg;
+  if (evt.evt === "battery")
+    battEl.textContent = "battery: " + evt.level + "%" + (evt.charging ? " ⚡" : "");
+  if (evt.evt === "bedtime")
+    bedtimeEl.textContent = evt.active ? "bedtime: active" : "";
+  if (evt.evt === "usage_daily") { lastUsage = evt; renderUsage(); }
+  if (evt.evt === "block_triggered" && !policy.blocked.includes(evt.pkg)) {
+    // fast-path show as blocked even before we re-fetch state
+  }
+}
+
+function appendEvent(evt) {
+  const t = evt.t ? new Date(evt.t * 1000).toLocaleTimeString() : new Date().toLocaleTimeString();
+  const line = `[${t}] ${JSON.stringify(evt)}\n`;
+  eventsEl.textContent = (line + eventsEl.textContent).slice(0, 8000);
+}
+
+function renderPolicy() {
+  const pkgs = new Set([...(policy.blocked || []), ...Object.keys(policy.limits || {})]);
+  pkgsEl.innerHTML = "";
+  for (const pkg of Array.from(pkgs).sort()) {
+    const row = document.createElement("div");
+    row.className = "pkg";
+    const blocked = (policy.blocked || []).includes(pkg);
+    const limit = (policy.limits || {})[pkg] || "";
+    row.innerHTML = `
+      <code>${pkg}</code>
+      <input type="number" min="0" value="${limit}" title="daily minutes">
+      <button data-blk="${blocked ? 0 : 1}">${blocked ? "Unblock" : "Block"}</button>
+      <button data-rm="1">Remove</button>`;
+    const [, input, blkBtn, rmBtn] = row.children;
+    input.onchange = () => postJson("/api/action/limits", {
+      packages: { [pkg]: { daily_minutes: parseInt(input.value || "0", 10) } },
+      total_minutes: policy.total_minutes || 0,
+    });
+    blkBtn.onclick = () => postJson("/api/action/block", { package: pkg, block: !blocked });
+    rmBtn.onclick = () => {
+      // remove from both lists
+      policy.blocked = (policy.blocked || []).filter(x => x !== pkg);
+      delete (policy.limits || {})[pkg];
+      postJson("/api/policy", policy);
+    };
+    pkgsEl.appendChild(row);
+  }
+  document.getElementById("btStart").value = policy.bedtime?.start || "";
+  document.getElementById("btEnd").value = policy.bedtime?.end || "";
+  document.getElementById("btEnabled").checked = !!policy.bedtime?.enabled;
+  document.getElementById("totalMinutes").value = policy.total_minutes || 0;
+}
+
+function renderUsage() {
+  const by = lastUsage.by_pkg || {};
+  const rows = Object.entries(by).sort((a,b)=>b[1]-a[1]).slice(0, 15);
+  usageEl.innerHTML = `<div><b>${lastUsage.total_minutes || 0}</b> min total today (${lastUsage.date || ""})</div>`
+    + rows.map(([k,v]) => `<div>${k}: <b>${v}</b> min</div>`).join("");
+}
+
+async function postJson(path, body) {
+  const r = await fetch(path + tokenQS, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify(body),
+  });
+  if (r.ok) refreshState();
+  return r;
+}
+
+async function refreshState() {
+  const r = await fetch("/api/state" + tokenQS, { headers: authHeaders });
+  if (r.ok) applyState(await r.json());
+}
+
+// ---- controls ----
+
+document.getElementById("watchBtn").onclick = () => { if (!ws || ws.readyState !== 1) connect(); };
+document.getElementById("stopBtn").onclick = () => { if (ws) ws.close(); img.removeAttribute("src"); };
+document.getElementById("shotBtn").onclick = async () => {
+  const r = await fetch("/api/action/screenshot" + tokenQS, { method: "POST", headers: authHeaders });
+  if (r.ok) {
+    const blob = await r.blob();
+    if (url) URL.revokeObjectURL(url);
+    url = URL.createObjectURL(blob);
+    img.src = url;
+  }
+};
+document.getElementById("lockBtn").onclick = () => fetch("/api/action/lock" + tokenQS, { method:"POST", headers: authHeaders });
+
+for (const b of document.querySelectorAll("button[data-key]")) {
+  b.onclick = () => postJson("/api/action/key", { code: b.dataset.key });
+}
+document.getElementById("typeBtn").onclick = () => {
+  const el = document.getElementById("typeField");
+  postJson("/api/action/type", { text: el.value });
+  el.value = "";
+};
+
+img.addEventListener("click", (e) => {
+  const rect = img.getBoundingClientRect();
+  const x = Math.round((e.clientX - rect.left) * NATIVE_W / rect.width);
+  const y = Math.round((e.clientY - rect.top) * NATIVE_H / rect.height);
+  postJson("/api/action/tap", { x, y });
+});
+
+document.getElementById("addPkg").onclick = () => {
+  const pkg = document.getElementById("newPkg").value.trim();
+  const lim = parseInt(document.getElementById("newLimit").value || "0", 10);
+  if (!pkg) return;
+  policy.limits = policy.limits || {};
+  if (lim > 0) policy.limits[pkg] = lim;
+  if (!policy.blocked.includes(pkg) && lim <= 0) policy.blocked.push(pkg);
+  postJson("/api/policy", policy);
+  document.getElementById("newPkg").value = "";
+  document.getElementById("newLimit").value = "";
+};
+
+document.getElementById("saveBedtime").onclick = () => postJson("/api/action/bedtime", {
+  start: document.getElementById("btStart").value,
+  end: document.getElementById("btEnd").value,
+  enabled: document.getElementById("btEnabled").checked,
+});
+
+document.getElementById("saveTotal").onclick = () => postJson("/api/action/limits", {
+  packages: Object.fromEntries(Object.entries(policy.limits || {}).map(([k,v]) => [k, {daily_minutes:v}])),
+  total_minutes: parseInt(document.getElementById("totalMinutes").value || "0", 10),
+});
+
+refreshState();
+connect();
+</script>
+</body>
+</html>
