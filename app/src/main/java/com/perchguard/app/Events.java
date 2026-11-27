@@ -12,6 +12,10 @@ import org.json.JSONObject;
 public final class Events {
 
     public static String hello() {
+        return hello(0, 0);
+    }
+
+    public static String hello(int w, int h) {
         try {
             JSONObject o = new JSONObject();
             o.put("evt", "hello");
@@ -19,8 +23,8 @@ public final class Events {
             o.put("manufacturer", Build.MANUFACTURER);
             o.put("sdk", Build.VERSION.SDK_INT);
             JSONObject s = new JSONObject();
-            s.put("w", 1116);
-            s.put("h", 2484);
+            s.put("w", w > 0 ? w : 1116);
+            s.put("h", h > 0 ? h : 2484);
             o.put("screen", s);
             return o.toString();
         } catch (JSONException e) { return "{\"evt\":\"hello\"}"; }

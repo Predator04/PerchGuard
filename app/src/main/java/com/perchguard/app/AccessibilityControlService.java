@@ -20,6 +20,8 @@ import android.view.accessibility.AccessibilityNodeInfo;
 public class AccessibilityControlService extends AccessibilityService {
     private static final String TAG = "PerchGuard.AX";
     private static volatile AccessibilityControlService instance;
+    private volatile String lastReportedPkg = "";
+    private volatile long lastBlockLaunchMs = 0;
 
     public static AccessibilityControlService getInstance() {
         return instance;
@@ -48,12 +50,21 @@ public class AccessibilityControlService extends AccessibilityService {
         if (pkg == null) return;
         String pkgStr = pkg.toString();
         if ("com.perchguard.app".equals(pkgStr)) return;
+        // Ignore system UI chrome that fires frequently but isn't an app switch.
+        if ("com.android.systemui".equals(pkgStr)) return;
 
-        // Notify the relay of the foreground change — the dashboard shows this.
-        ScreenService.sendEvent(Events.foreground(pkgStr));
+        // Debounce: only emit foreground events when the package actually changes.
+        if (!pkgStr.equals(lastReportedPkg)) {
+            lastReportedPkg = pkgStr;
+            ScreenService.sendEvent(Events.foreground(pkgStr));
+        }
 
         Policy policy = Policy.get(this);
         if (policy.isBlocked(pkgStr)) {
+            long now = System.currentTimeMillis();
+            // Rate-limit block-activity launches so we don't spam the task stack.
+            if (now - lastBlockLaunchMs < 750) return;
+            lastBlockLaunchMs = now;
             Log.i(TAG, "blocking " + pkgStr);
             ScreenService.sendEvent(Events.blockTriggered(pkgStr));
             try {
@@ -77,13 +88,22 @@ public class AccessibilityControlService extends AccessibilityService {
     }
 
     public boolean swipe(int x1, int y1, int x2, int y2, int durMs) {
-        Path p = new Path();
-        p.moveTo(x1, y1);
-        p.lineTo(x2, y2);
-        GestureDescription.StrokeDescription stroke =
-            new GestureDescription.StrokeDescription(p, 0, Math.max(1, durMs));
-        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
-        return dispatchGesture(gesture, null, null);
+        try {
+            Path p = new Path();
+            p.moveTo(x1, y1);
+            // moveTo + lineTo with identical endpoints produces an empty path; nudge for taps.
+            if (x1 == x2 && y1 == y2) p.lineTo(x2 + 0.5f, y2 + 0.5f);
+            else                       p.lineTo(x2, y2);
+            long maxMs = GestureDescription.getMaxGestureDuration();
+            int clamped = (int) Math.max(1, Math.min(maxMs, durMs));
+            GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(p, 0, clamped);
+            GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
+            return dispatchGesture(gesture, null, null);
+        } catch (Exception e) {
+            Log.w(TAG, "swipe failed", e);
+            return false;
+        }
     }
 
     public boolean typeText(String text) {

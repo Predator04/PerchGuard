@@ -7,6 +7,7 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
@@ -19,7 +20,9 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.WindowManager;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -65,17 +68,30 @@ public class ScreenService extends Service {
     private HandlerThread handlerThread;
     private Handler handler;
     private OkHttpClient client;
-    private WebSocket webSocket;
+    private volatile WebSocket webSocket;
     private volatile boolean streaming = false;
     private volatile boolean sendOneFrame = false;
+    private volatile boolean connecting = false;
     private long lastSentNs = 0;
     private String relayUrl;
+    private int deviceW = 1080, deviceH = 2400, deviceDpi = 240;
 
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
-        startForeground(1, buildNotification());
+        // Android 14 (API 34+) requires foregroundServiceType on startForeground() for
+        // mediaProjection services, otherwise MediaProjection.createVirtualDisplay throws.
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(1, buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                | ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(1, buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+        } else {
+            startForeground(1, buildNotification());
+        }
         handlerThread = new HandlerThread("perchguard-capture");
         handlerThread.start();
         handler = new Handler(handlerThread.getLooper());
@@ -83,6 +99,21 @@ public class ScreenService extends Service {
             .pingInterval(20, TimeUnit.SECONDS)
             .build();
         relayUrl = Prefs.relayUrl(this);
+        readDeviceMetrics();
+    }
+
+    private void readDeviceMetrics() {
+        try {
+            WindowManager wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+            if (wm == null) return;
+            DisplayMetrics dm = new DisplayMetrics();
+            wm.getDefaultDisplay().getRealMetrics(dm);
+            if (dm.widthPixels > 0) deviceW = dm.widthPixels;
+            if (dm.heightPixels > 0) deviceH = dm.heightPixels;
+            if (dm.densityDpi > 0) deviceDpi = dm.densityDpi;
+        } catch (Exception e) {
+            Log.w(TAG, "readDeviceMetrics", e);
+        }
     }
 
     @Override
@@ -175,39 +206,49 @@ public class ScreenService extends Service {
         int bmpW = CAP_W + rowPadding / pixelStride;
         Bitmap padded = Bitmap.createBitmap(bmpW, CAP_H, Bitmap.Config.ARGB_8888);
         padded.copyPixelsFromBuffer(buffer);
-        Bitmap cropped = Bitmap.createBitmap(padded, 0, 0, CAP_W, CAP_H);
+        Bitmap cropped = (bmpW == CAP_W) ? padded
+            : Bitmap.createBitmap(padded, 0, 0, CAP_W, CAP_H);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         cropped.compress(Bitmap.CompressFormat.JPEG, 60, baos);
-        cropped.recycle();
+        if (cropped != padded) cropped.recycle();
         padded.recycle();
         return baos.toByteArray();
     }
 
-    private void connect() {
-        if (webSocket != null) return;
+    private synchronized void connect() {
+        if (webSocket != null || connecting) return;
         if (relayUrl == null || relayUrl.isEmpty()) return;
+        connecting = true;
         Request req = new Request.Builder().url(relayUrl).build();
-        webSocket = client.newWebSocket(req, new WebSocketListener() {
-            @Override public void onOpen(WebSocket ws, Response response) {
-                streaming = true;
-                Log.i(TAG, "relay connected " + relayUrl);
-                ws.send(Events.hello());
-            }
-            @Override public void onMessage(WebSocket ws, String text) {
-                handleCommand(text);
-            }
-            @Override public void onClosed(WebSocket ws, int code, String reason) {
-                streaming = false;
-                webSocket = null;
-                handler.postDelayed(ScreenService.this::connect, 3000);
-            }
-            @Override public void onFailure(WebSocket ws, Throwable t, Response response) {
-                streaming = false;
-                webSocket = null;
-                Log.w(TAG, "relay failure: " + t.getMessage());
-                handler.postDelayed(ScreenService.this::connect, 3000);
-            }
-        });
+        try {
+            webSocket = client.newWebSocket(req, new WebSocketListener() {
+                @Override public void onOpen(WebSocket ws, Response response) {
+                    connecting = false;
+                    streaming = true;
+                    Log.i(TAG, "relay connected " + relayUrl);
+                    ws.send(Events.hello(deviceW, deviceH));
+                }
+                @Override public void onMessage(WebSocket ws, String text) {
+                    handleCommand(text);
+                }
+                @Override public void onClosed(WebSocket ws, int code, String reason) {
+                    connecting = false;
+                    streaming = false;
+                    webSocket = null;
+                    handler.postDelayed(ScreenService.this::connect, 3000);
+                }
+                @Override public void onFailure(WebSocket ws, Throwable t, Response response) {
+                    connecting = false;
+                    streaming = false;
+                    webSocket = null;
+                    Log.w(TAG, "relay failure: " + t.getMessage());
+                    handler.postDelayed(ScreenService.this::connect, 3000);
+                }
+            });
+        } catch (Exception e) {
+            connecting = false;
+            Log.w(TAG, "connect", e);
+        }
     }
 
     // ---------- command dispatch ----------
@@ -321,8 +362,10 @@ public class ScreenService extends Service {
 
     public static boolean sendEvent(String json) {
         ScreenService svc = instance;
-        if (svc == null || svc.webSocket == null) return false;
-        try { return svc.webSocket.send(json); } catch (Exception e) { return false; }
+        if (svc == null) return false;
+        WebSocket ws = svc.webSocket;
+        if (ws == null) return false;
+        try { return ws.send(json); } catch (Exception e) { return false; }
     }
 
     public static void requestScreenshot() {

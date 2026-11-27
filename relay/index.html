@@ -69,7 +69,7 @@
       <input id="typeField" placeholder="type into focused field…" style="flex:1; min-width:180px;">
       <button id="typeBtn">Send</button>
     </div>
-    <div class="kv">Tap the image to send a tap. Native coords <b>1116×2484</b>.</div>
+    <div class="kv">Tap the image to send a tap. Native coords <b id="nativeCoords">—</b>.</div>
   </section>
 
   <section class="panel">
@@ -105,10 +105,17 @@
 </main>
 
 <script>
-const NATIVE_W = 1116, NATIVE_H = 2484;
+let NATIVE_W = 1116, NATIVE_H = 2484;
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
 const authHeaders = TOKEN ? { "Authorization": "Bearer " + TOKEN } : {};
 const tokenQS = TOKEN ? ("?token=" + encodeURIComponent(TOKEN)) : "";
+const nativeCoordsEl = document.getElementById("nativeCoords");
+function setNative(w, h) {
+  if (!w || !h) return;
+  NATIVE_W = w; NATIVE_H = h;
+  nativeCoordsEl.textContent = w + "×" + h;
+}
+setNative(NATIVE_W, NATIVE_H);
 
 const img = document.getElementById("view");
 const kidStatus = document.getElementById("kidStatus");
@@ -122,12 +129,13 @@ const usageEl = document.getElementById("usage");
 
 let ws = null, url = null, policy = {blocked:[], limits:{}, total_minutes:0, bedtime:{start:"",end:"",enabled:false}};
 let lastUsage = {by_pkg:{}, total_minutes:0};
+let reconnectDelay = 1000;
 
 function connect() {
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
     + location.host + "/parent/view" + tokenQS);
   ws.binaryType = "blob";
-  ws.onopen = () => wsStatus.textContent = "dashboard live";
+  ws.onopen = () => { wsStatus.textContent = "dashboard live"; reconnectDelay = 1000; };
   ws.onmessage = (e) => {
     if (typeof e.data === "string") {
       let obj; try { obj = JSON.parse(e.data); } catch { return; }
@@ -139,8 +147,12 @@ function connect() {
       img.src = url;
     }
   };
-  ws.onclose = () => { wsStatus.textContent = "dashboard reconnecting…"; setTimeout(connect, 2000); };
-  ws.onerror = () => ws.close();
+  ws.onclose = () => {
+    wsStatus.textContent = "dashboard reconnecting…";
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+  };
+  ws.onerror = () => { try { ws.close(); } catch {} };
 }
 
 function applyState(s) {
@@ -150,6 +162,7 @@ function applyState(s) {
   if (s.battery && s.battery.level != null)
     battEl.textContent = "battery: " + s.battery.level + "%" + (s.battery.charging ? " ⚡" : "");
   bedtimeEl.textContent = s.bedtime_active ? "bedtime: active" : "";
+  if (s.device && s.device.screen) setNative(s.device.screen.w, s.device.screen.h);
   if (s.policy) { policy = s.policy; renderPolicy(); }
   if (s.usage) { lastUsage = s.usage; renderUsage(); }
   (s.events || []).forEach(appendEvent);
@@ -157,15 +170,13 @@ function applyState(s) {
 
 function applyEvent(evt) {
   appendEvent(evt);
+  if (evt.evt === "hello" && evt.screen) setNative(evt.screen.w, evt.screen.h);
   if (evt.evt === "foreground") fgEl.textContent = "foreground: " + evt.pkg;
   if (evt.evt === "battery")
     battEl.textContent = "battery: " + evt.level + "%" + (evt.charging ? " ⚡" : "");
   if (evt.evt === "bedtime")
     bedtimeEl.textContent = evt.active ? "bedtime: active" : "";
   if (evt.evt === "usage_daily") { lastUsage = evt; renderUsage(); }
-  if (evt.evt === "block_triggered" && !policy.blocked.includes(evt.pkg)) {
-    // fast-path show as blocked even before we re-fetch state
-  }
 }
 
 function appendEvent(evt) {
@@ -176,42 +187,63 @@ function appendEvent(evt) {
 
 function renderPolicy() {
   const pkgs = new Set([...(policy.blocked || []), ...Object.keys(policy.limits || {})]);
-  pkgsEl.innerHTML = "";
+  pkgsEl.textContent = "";
   for (const pkg of Array.from(pkgs).sort()) {
     const row = document.createElement("div");
     row.className = "pkg";
     const blocked = (policy.blocked || []).includes(pkg);
     const limit = (policy.limits || {})[pkg] || "";
-    row.innerHTML = `
-      <code>${pkg}</code>
-      <input type="number" min="0" value="${limit}" title="daily minutes">
-      <button data-blk="${blocked ? 0 : 1}">${blocked ? "Unblock" : "Block"}</button>
-      <button data-rm="1">Remove</button>`;
-    const [, input, blkBtn, rmBtn] = row.children;
+
+    const codeEl = document.createElement("code");
+    codeEl.textContent = pkg;  // safe: textContent prevents HTML injection
+
+    const input = document.createElement("input");
+    input.type = "number"; input.min = "0"; input.value = limit;
+    input.title = "daily minutes";
+
+    const blkBtn = document.createElement("button");
+    blkBtn.textContent = blocked ? "Unblock" : "Block";
+
+    const rmBtn = document.createElement("button");
+    rmBtn.textContent = "Remove";
+
     input.onchange = () => postJson("/api/action/limits", {
-      packages: { [pkg]: { daily_minutes: parseInt(input.value || "0", 10) } },
+      packages: { [pkg]: { daily_minutes: Math.max(0, parseInt(input.value || "0", 10) || 0) } },
       total_minutes: policy.total_minutes || 0,
     });
     blkBtn.onclick = () => postJson("/api/action/block", { package: pkg, block: !blocked });
     rmBtn.onclick = () => {
-      // remove from both lists
       policy.blocked = (policy.blocked || []).filter(x => x !== pkg);
       delete (policy.limits || {})[pkg];
       postJson("/api/policy", policy);
     };
+
+    row.appendChild(codeEl);
+    row.appendChild(input);
+    row.appendChild(blkBtn);
+    row.appendChild(rmBtn);
     pkgsEl.appendChild(row);
   }
-  document.getElementById("btStart").value = policy.bedtime?.start || "";
-  document.getElementById("btEnd").value = policy.bedtime?.end || "";
-  document.getElementById("btEnabled").checked = !!policy.bedtime?.enabled;
+  document.getElementById("btStart").value = (policy.bedtime && policy.bedtime.start) || "";
+  document.getElementById("btEnd").value = (policy.bedtime && policy.bedtime.end) || "";
+  document.getElementById("btEnabled").checked = !!(policy.bedtime && policy.bedtime.enabled);
   document.getElementById("totalMinutes").value = policy.total_minutes || 0;
 }
 
 function renderUsage() {
   const by = lastUsage.by_pkg || {};
   const rows = Object.entries(by).sort((a,b)=>b[1]-a[1]).slice(0, 15);
-  usageEl.innerHTML = `<div><b>${lastUsage.total_minutes || 0}</b> min total today (${lastUsage.date || ""})</div>`
-    + rows.map(([k,v]) => `<div>${k}: <b>${v}</b> min</div>`).join("");
+  usageEl.textContent = "";
+  const hd = document.createElement("div");
+  const total = document.createElement("b"); total.textContent = String(lastUsage.total_minutes || 0);
+  hd.append(total, " min total today (" + (lastUsage.date || "") + ")");
+  usageEl.appendChild(hd);
+  for (const [k, v] of rows) {
+    const d = document.createElement("div");
+    const val = document.createElement("b"); val.textContent = String(v);
+    d.append(k + ": ", val, " min");
+    usageEl.appendChild(d);
+  }
 }
 
 async function postJson(path, body) {
@@ -255,8 +287,11 @@ document.getElementById("typeBtn").onclick = () => {
 
 img.addEventListener("click", (e) => {
   const rect = img.getBoundingClientRect();
-  const x = Math.round((e.clientX - rect.left) * NATIVE_W / rect.width);
-  const y = Math.round((e.clientY - rect.top) * NATIVE_H / rect.height);
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const x = Math.max(0, Math.min(NATIVE_W - 1,
+    Math.round((e.clientX - rect.left) * NATIVE_W / rect.width)));
+  const y = Math.max(0, Math.min(NATIVE_H - 1,
+    Math.round((e.clientY - rect.top) * NATIVE_H / rect.height)));
   postJson("/api/action/tap", { x, y });
 });
 

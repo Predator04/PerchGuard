@@ -9,6 +9,7 @@ import android.app.usage.UsageStatsManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ServiceInfo;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
@@ -70,7 +71,12 @@ public class GuardService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
-        startForeground(2, buildNotification());
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(2, buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        } else {
+            startForeground(2, buildNotification());
+        }
         ht = new HandlerThread("perchguard-guard");
         ht.start();
         h = new Handler(ht.getLooper());
@@ -148,12 +154,18 @@ public class GuardService extends Service {
 
     private void enforceLimits() {
         Policy policy = Policy.get(this);
+        // Snapshot under Policy's monitor to avoid ConcurrentModification from
+        // parent-driven policy edits racing with this tick.
+        Map<String, Integer> snapshot;
+        synchronized (policy) {
+            snapshot = new HashMap<>(policy.limits);
+        }
         boolean changed = false;
-        for (Map.Entry<String, Integer> e : policy.limits.entrySet()) {
+        for (Map.Entry<String, Integer> e : snapshot.entrySet()) {
             Long ms = todayMsByPkg.get(e.getKey());
             if (ms == null) continue;
             int minutes = (int) (ms / 60_000L);
-            if (minutes >= e.getValue() && !policy.blocked.contains(e.getKey())) {
+            if (minutes >= e.getValue() && !policy.isBlocked(e.getKey())) {
                 policy.addBlocked(e.getKey());
                 changed = true;
             }
