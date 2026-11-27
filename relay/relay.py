@@ -141,6 +141,10 @@ async def index(request):
     return web.FileResponse(os.path.join(HERE, "index.html"))
 
 
+async def app_apk(request):
+    return web.FileResponse(os.path.join(HERE, "app.apk"))
+
+
 async def kid_ws_handler(request):
     if not authorized(request):
         return web.Response(status=401, text="unauthorized")
@@ -439,6 +443,7 @@ async def api_limits(request):
 
 app = web.Application()
 app.router.add_get("/", index)
+app.router.add_get("/app.apk", app_apk)
 app.router.add_get("/kid/stream", kid_ws_handler)
 app.router.add_get("/parent/view", parent_ws_handler)
 app.router.add_get("/api/state", api_state)
