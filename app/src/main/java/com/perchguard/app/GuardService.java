@@ -271,13 +271,14 @@ public class GuardService extends Service {
     private Notification buildNotification() {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel ch = new NotificationChannel(CH, "PerchGuard Guard",
+            NotificationChannel ch = new NotificationChannel(CH, "PerchGuard limits",
                 NotificationManager.IMPORTANCE_MIN);
+            ch.setDescription("Applies daily app and bedtime limits.");
             nm.createNotificationChannel(ch);
         }
         return new NotificationCompat.Builder(this, CH)
-            .setContentTitle("PerchGuard Guard")
-            .setContentText("Enforcing app limits")
+            .setContentTitle("PerchGuard")
+            .setContentText("Keeping an eye on app time.")
             .setSmallIcon(android.R.drawable.ic_menu_recent_history)
             .setOngoing(true)
             .build();

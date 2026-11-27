@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
@@ -383,12 +384,19 @@ public class ScreenService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel ch = new NotificationChannel(
                 "perchguard", "PerchGuard", NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription("Keeps PerchGuard running in the background.");
             nm.createNotificationChannel(ch);
         }
+        Intent open = new Intent(this, MainActivity.class);
+        open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT
+            | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, open, piFlags);
         return new NotificationCompat.Builder(this, "perchguard")
-            .setContentTitle("PerchGuard")
-            .setContentText("Screen monitoring active")
+            .setContentTitle("PerchGuard is watching")
+            .setContentText("Live view and limits are active.")
             .setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentIntent(pi)
             .setOngoing(true)
             .build();
     }
