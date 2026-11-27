@@ -7,6 +7,7 @@ relay/policy.json
 relay/state.json
 relay/uploads/
 relay/__pycache__/
+relay/crash.log
 
 apikey.properties
 parent/apikey.properties

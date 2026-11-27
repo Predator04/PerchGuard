@@ -71,6 +71,7 @@ public class MainActivity extends Activity {
     private static final long RENDER_INTERVAL_MS = 100; // ~10fps cap
     private volatile boolean decodeBusy = false;
 
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -204,6 +205,31 @@ public class MainActivity extends Activity {
         typeRow.addView(typeField);
         typeRow.addView(sendBtn);
         root.addView(typeRow);
+
+        // Update row: check-this-app + force-update-child, prominent.
+        LinearLayout updRow = Ui.row(this);
+        LinearLayout.LayoutParams updRowLp = Ui.lpMatch();
+        updRowLp.topMargin = Ui.dp(this, 8);
+        updRow.setLayoutParams(updRowLp);
+
+        android.widget.Button checkUpdBtn = Ui.primaryButton(this, "Check for updates");
+        checkUpdBtn.setOnClickListener(v ->
+            startActivity(new Intent(this, UpdateActivity.class)));
+        LinearLayout.LayoutParams cuLp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        checkUpdBtn.setLayoutParams(cuLp);
+        updRow.addView(checkUpdBtn);
+
+        android.widget.Button forceUpdBtn = Ui.button(this, "Force update child");
+        forceUpdBtn.setOnClickListener(v -> doPost("/api/action/update",
+                new JSONObject(), "Update sent to child"));
+        LinearLayout.LayoutParams fuLp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        fuLp.leftMargin = Ui.dp(this, 8);
+        forceUpdBtn.setLayoutParams(fuLp);
+        updRow.addView(forceUpdBtn);
+
+        root.addView(updRow);
 
         hintBelow = Ui.muted(this, "Tap image = tap child · Drag = swipe");
         LinearLayout.LayoutParams hintLp = Ui.lpMatch();

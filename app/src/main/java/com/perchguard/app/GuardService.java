@@ -9,6 +9,7 @@ import android.app.usage.UsageStatsManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.os.BatteryManager;
 import android.os.Build;
@@ -19,6 +20,7 @@ import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -72,13 +74,12 @@ public class GuardService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(2, buildNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                | ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
-        } else if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(2, buildNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        int fgsType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+        if (Build.VERSION.SDK_INT >= 34 && hasLocationPermission()) {
+            fgsType |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(2, buildNotification(), fgsType);
         } else {
             startForeground(2, buildNotification());
         }
@@ -91,6 +92,13 @@ public class GuardService extends Service {
         locationReporter = new LocationReporter(this);
         locationReporter.startIfPermitted();
         h.post(ticker);
+    }
+
+    private boolean hasLocationPermission() {
+        return ContextCompat.checkSelfPermission(this,
+                android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            || ContextCompat.checkSelfPermission(this,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {

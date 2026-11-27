@@ -111,53 +111,59 @@ public final class UpdateChecker {
 
     public void downloadAndInstall(String url, String name, Activity activity) {
         Toast.makeText(activity, "Downloading update…", Toast.LENGTH_SHORT).show();
+        downloadAndInstall(url, name, (Context) activity,
+            msg -> main.post(() -> Toast.makeText(activity, msg, Toast.LENGTH_LONG).show()));
+    }
+
+    /** Headless variant for service-triggered updates — no Activity, no toasts. */
+    public void downloadAndInstall(String url, String name, Context context) {
+        downloadAndInstall(url, name, context, msg -> Log.i(TAG, msg));
+    }
+
+    private interface Reporter { void say(String msg); }
+
+    private void downloadAndInstall(String url, String name, Context context,
+                                    Reporter report) {
         Request req = new Request.Builder().url(url).build();
         http.newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, java.io.IOException e) {
-                main.post(() -> Toast.makeText(activity,
-                    "Update download failed: " + e.getMessage(),
-                    Toast.LENGTH_LONG).show());
+                report.say("Update download failed: " + e.getMessage());
             }
             @Override public void onResponse(Call call, Response resp) {
-                File out = null;
                 try (ResponseBody body = resp.body()) {
                     if (!resp.isSuccessful() || body == null) {
-                        main.post(() -> Toast.makeText(activity,
-                            "Update HTTP " + resp.code(), Toast.LENGTH_LONG).show());
+                        report.say("Update HTTP " + resp.code());
                         return;
                     }
                     File dir = new File(ctx.getFilesDir(), "updates");
                     if (!dir.exists()) dir.mkdirs();
-                    out = new File(dir, name == null ? "update.apk" : name);
+                    File out = new File(dir, name == null ? "update.apk" : name);
                     try (InputStream in = body.byteStream();
                          FileOutputStream fos = new FileOutputStream(out)) {
                         byte[] buf = new byte[32 * 1024];
                         int n;
                         while ((n = in.read(buf)) > 0) fos.write(buf, 0, n);
                     }
-                    launchInstall(activity, out);
+                    launchInstall(context, out);
                 } catch (Exception e) {
                     Log.w(TAG, "download/install", e);
-                    main.post(() -> Toast.makeText(activity,
-                        "Install failed: " + e.getMessage(),
-                        Toast.LENGTH_LONG).show());
+                    report.say("Install failed: " + e.getMessage());
                 }
             }
         });
     }
 
-    public static void launchInstall(Activity activity, File apk) {
-        Uri uri = FileProvider.getUriForFile(activity,
-            activity.getPackageName() + ".updates", apk);
+    public static void launchInstall(Context context, File apk) {
+        Uri uri = FileProvider.getUriForFile(context,
+            context.getPackageName() + ".updates", apk);
         Intent i = new Intent(Intent.ACTION_VIEW);
         i.setDataAndType(uri, "application/vnd.android.package-archive");
         i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
             | Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
-            activity.startActivity(i);
+            context.startActivity(i);
         } catch (Exception e) {
-            Toast.makeText(activity, "No installer: " + e.getMessage(),
-                Toast.LENGTH_LONG).show();
+            Log.w(TAG, "launchInstall", e);
         }
     }
 

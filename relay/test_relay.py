@@ -253,6 +253,36 @@ async def run_tests(port):
         check("/map -> 200", s == 200, f"got {s}")
         check("/map carries Leaflet", b"leaflet" in b.lower())
 
+        # 12a.4 — /api/action/update forwards {"cmd":"update"} to the child
+        async def wait_update():
+            try:
+                for _ in range(8):
+                    m = await asyncio.wait_for(kid_ws.receive(), timeout=2)
+                    if m.type == aiohttp.WSMsgType.TEXT and '"update"' in m.data:
+                        return json.loads(m.data)
+            except Exception:
+                return None
+        waiter = asyncio.create_task(wait_update())
+        got = await loop.run_in_executor(None, lambda: http("POST",
+            base + "/api/action/update", token=TOKEN, body={}))
+        check("update -> 200", got[0] == 200, f"got {got[0]}")
+        cmd = await waiter
+        check("kid received update cmd", cmd and cmd.get("cmd") == "update")
+
+        # 12a.5 — /api/crash accepts a report without auth and persists it
+        crash_payload = {"stack": "java.lang.RuntimeException: boom\n\tat X.y(X.java:1)",
+                         "version": 42}
+        # NOTE: no token → endpoint must still accept it.
+        s, b = http("POST", base + "/api/crash", body=crash_payload)
+        check("crash w/o token -> 200", s == 200, f"got {s}")
+        crash_log = os.path.join(HERE, "crash.log")
+        on_disk = os.path.exists(crash_log)
+        check("crash.log on disk", on_disk)
+        if on_disk:
+            with open(crash_log) as f:
+                content = f.read()
+            check("crash.log carries stack", "boom" in content and "version=42" in content)
+
         # 12b. /api/apk POST (raw bytes) stores + tells child via install_apk
         async def wait_install():
             try:
@@ -342,6 +372,10 @@ def main():
     uploaded = os.path.join(HERE, "uploads", "app.apk")
     if os.path.exists(uploaded):
         try: os.remove(uploaded)
+        except OSError: pass
+    crash_log = os.path.join(HERE, "crash.log")
+    if os.path.exists(crash_log):
+        try: os.remove(crash_log)
         except OSError: pass
     proc = subprocess.Popen([sys.executable, os.path.join(HERE, "relay.py")],
                             env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

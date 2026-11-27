@@ -169,14 +169,21 @@ public class MainActivity extends Activity {
         });
         root.addView(stopLink);
 
-        TextView updateLink = new TextView(this);
-        updateLink.setText("Check for updates");
-        updateLink.setTextColor(COL_MUTED);
-        updateLink.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        updateLink.setGravity(Gravity.CENTER);
-        updateLink.setPadding(dp(16), dp(4), dp(16), dp(4));
-        updateLink.setOnClickListener(v -> checkForUpdate(updateLink));
-        root.addView(updateLink);
+        Button updateBtn = new Button(this);
+        updateBtn.setText("Check for updates");
+        updateBtn.setAllCaps(false);
+        updateBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        updateBtn.setTextColor(Color.WHITE);
+        GradientDrawable updateBg = new GradientDrawable();
+        updateBg.setColor(COL_ACCENT_DIM);
+        updateBg.setCornerRadius(dp(14));
+        updateBtn.setBackground(updateBg);
+        LinearLayout.LayoutParams updateLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
+        updateLp.topMargin = dp(12);
+        updateBtn.setLayoutParams(updateLp);
+        updateBtn.setOnClickListener(v -> checkForUpdateBtn(updateBtn));
+        root.addView(updateBtn);
 
         TextView versionLine = new TextView(this);
         versionLine.setText("PerchGuard child v" + BuildConfig.VERSION_NAME
@@ -599,22 +606,29 @@ public class MainActivity extends Activity {
         return l;
     }
 
-    private void checkForUpdate(TextView link) {
-        link.setText("Checking…");
+    private void checkForUpdateBtn(Button btn) {
+        btn.setText("Checking…");
+        btn.setEnabled(false);
         new UpdateChecker(this).check(new UpdateChecker.Listener() {
             @Override public void onNoUpdate(int installed, int latest) {
-                link.setText("Up to date (v" + BuildConfig.VERSION_NAME + ")");
+                btn.setText("Up to date (v" + BuildConfig.VERSION_NAME + ")");
+                btn.setEnabled(true);
             }
             @Override public void onUpdateAvailable(int latest, String tag,
                                                      String assetUrl, String assetName) {
-                link.setText("Update " + tag + " available — tap to install");
-                link.setTextColor(COL_ACCENT);
-                link.setOnClickListener(v ->
+                btn.setText("Install update " + tag);
+                GradientDrawable bg = new GradientDrawable();
+                bg.setColor(COL_ACCENT);
+                bg.setCornerRadius(dp(14));
+                btn.setBackground(bg);
+                btn.setEnabled(true);
+                btn.setOnClickListener(v ->
                     new UpdateChecker(MainActivity.this)
                         .downloadAndInstall(assetUrl, assetName, MainActivity.this));
             }
             @Override public void onError(String message) {
-                link.setText("Update check failed");
+                btn.setText("Update check failed — tap to retry");
+                btn.setEnabled(true);
                 Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
             }
         });

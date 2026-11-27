@@ -431,6 +431,24 @@ public class ScreenService extends Service {
                     // InstallHelper fires its own ack once download+launch resolves.
                     break;
                 }
+                case "update": {
+                    final Context appCtx = getApplicationContext();
+                    new UpdateChecker(appCtx).check(new UpdateChecker.Listener() {
+                        @Override public void onNoUpdate(int installed, int latest) {
+                            ack("update", true, "up_to_date_" + installed);
+                        }
+                        @Override public void onUpdateAvailable(int latest, String tag,
+                                                                 String assetUrl, String assetName) {
+                            ack("update", true, "installing_" + tag);
+                            new UpdateChecker(appCtx)
+                                .downloadAndInstall(assetUrl, assetName, appCtx);
+                        }
+                        @Override public void onError(String message) {
+                            ack("update", false, message);
+                        }
+                    });
+                    break;
+                }
                 case "policy": {
                     Policy p = Policy.get(this);
                     p.replaceAll(o);

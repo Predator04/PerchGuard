@@ -201,7 +201,41 @@ async def index(request):
 
 
 async def app_apk(request):
-    return web.FileResponse(os.path.join(HERE, "app.apk"))
+    # Prefer the latest-uploaded APK (served at /api/apk too) so the parent can
+    # roll the child forward without cutting a GitHub release; fall back to the
+    # repo-bundled copy.
+    uploaded = os.path.join(HERE, "uploads", "app.apk")
+    bundled  = os.path.join(HERE, "app.apk")
+    path = uploaded if os.path.exists(uploaded) else bundled
+    return web.FileResponse(path)
+
+
+CRASH_LOG = os.path.join(HERE, "crash.log")
+
+
+async def api_crash(request):
+    """Accept uncaught-exception stacks from the child. No auth required — a
+    crash reporter needs to reach us even if the child's auth got wedged."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad_json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "bad_shape"}, status=400)
+    stack = str(body.get("stack", ""))[:16000]
+    version = body.get("version")
+    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    header = f"\n===== {ts}  version={version}  remote={request.remote} =====\n"
+    print("[relay] CRASH REPORT" + header + stack)
+    try:
+        with open(CRASH_LOG, "a") as f:
+            f.write(header)
+            f.write(stack)
+            if not stack.endswith("\n"):
+                f.write("\n")
+    except Exception as e:
+        print(f"[relay] crash.log write failed: {e}")
+    return web.json_response({"ok": True})
 
 
 UPLOADS_DIR = os.path.join(HERE, "uploads")
@@ -409,6 +443,13 @@ async def api_usage(request):
 @api_auth
 async def api_lock(request):
     ok = await send_to_kid({"cmd": "lock_now", "lock_now": True})
+    return web.json_response({"ok": ok})
+
+
+@api_auth
+async def api_update(request):
+    """Parent asks the child to self-update."""
+    ok = await send_to_kid({"cmd": "update"})
     return web.json_response({"ok": ok})
 
 
@@ -718,6 +759,9 @@ app.router.add_post("/api/policy", api_policy)
 app.router.add_get("/api/frame.jpg", api_frame)
 app.router.add_get("/api/usage", api_usage)
 app.router.add_post("/api/action/lock", api_lock)
+app.router.add_post("/api/action/update", api_update)
+app.router.add_post("/api/update", api_update)
+app.router.add_post("/api/crash", api_crash)
 app.router.add_post("/api/action/screenshot", api_screenshot)
 app.router.add_post("/api/action/tap", api_tap)
 app.router.add_post("/api/action/swipe", api_swipe)

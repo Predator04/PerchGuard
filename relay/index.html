@@ -61,7 +61,9 @@
       <button id="stopBtn">Stop</button>
       <button id="shotBtn">Screenshot</button>
       <button id="lockBtn" class="danger">Lock now</button>
+      <button id="updateBtn">Force update</button>
     </div>
+    <div id="updateAck" class="kv" style="min-height: 1em;"></div>
     <div class="row">
       <button data-key="home">Home</button>
       <button data-key="back">Back</button>
@@ -318,6 +320,22 @@ document.getElementById("shotBtn").onclick = async () => {
   }
 };
 document.getElementById("lockBtn").onclick = () => fetch("/api/action/lock" + tokenQS, { method:"POST", headers: authHeaders });
+
+const updateAckEl = document.getElementById("updateAck");
+document.getElementById("updateBtn").onclick = async () => {
+  updateAckEl.textContent = "Sending update command…";
+  try {
+    const r = await fetch("/api/action/update" + tokenQS,
+      { method: "POST", headers: authHeaders });
+    const body = await r.json().catch(() => ({}));
+    updateAckEl.textContent = r.ok
+      ? (body.ok ? "Update command sent. Watch the events log for the ack."
+                 : "Relay has no connected child.")
+      : ("Relay HTTP " + r.status);
+  } catch (e) {
+    updateAckEl.textContent = "Network error: " + e.message;
+  }
+};
 
 for (const b of document.querySelectorAll("button[data-key]")) {
   b.onclick = () => postJson("/api/action/key", { code: b.dataset.key });
