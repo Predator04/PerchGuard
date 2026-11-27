@@ -207,7 +207,7 @@ async def app_apk(request):
     uploaded = os.path.join(HERE, "uploads", "app.apk")
     bundled  = os.path.join(HERE, "app.apk")
     path = uploaded if os.path.exists(uploaded) else bundled
-    return web.FileResponse(path)
+    return web.FileResponse(path, headers={"Cache-Control": "no-store"})
 
 
 CRASH_LOG = os.path.join(HERE, "crash.log")
