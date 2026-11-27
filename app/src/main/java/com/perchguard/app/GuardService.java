@@ -54,6 +54,7 @@ public class GuardService extends Service {
     private HandlerThread ht;
     private Handler h;
     private UsageStatsManager usm;
+    private LocationReporter locationReporter;
     private long lastQueryMs;
     private long lastReportMs;
     private String currentPkg = "";
@@ -71,7 +72,11 @@ public class GuardService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
-        if (Build.VERSION.SDK_INT >= 29) {
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(2, buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                | ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+        } else if (Build.VERSION.SDK_INT >= 29) {
             startForeground(2, buildNotification(),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         } else {
@@ -83,6 +88,8 @@ public class GuardService extends Service {
         usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         loadTodayCounters();
         lastQueryMs = startOfTodayMs();
+        locationReporter = new LocationReporter(this);
+        locationReporter.startIfPermitted();
         h.post(ticker);
     }
 
@@ -134,6 +141,10 @@ public class GuardService extends Service {
             lastReportMs = now;
             ScreenService.sendEvent(usageEvent());
             ScreenService.sendEvent(batteryEvent());
+            ScreenService.refreshAdaptiveFps();
+            // Opportunistically retry location in case the user has since
+            // granted the permission in Settings.
+            if (locationReporter != null) locationReporter.startIfPermitted();
             saveTodayCounters();
         }
     }
@@ -286,6 +297,7 @@ public class GuardService extends Service {
 
     @Override public void onDestroy() {
         if (h != null) h.removeCallbacks(ticker);
+        if (locationReporter != null) locationReporter.stop();
         if (ht != null) ht.quitSafely();
         saveTodayCounters();
         super.onDestroy();

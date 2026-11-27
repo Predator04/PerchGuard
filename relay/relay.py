@@ -20,6 +20,9 @@ Transports:
   POST /api/apk           body: raw APK bytes (application/vnd.android.package-archive)
                            OR  JSON {"url":"https://..."} — relay prefetches and tells child
   GET  /api/apk           serves the stored APK (child downloads this after install_apk cmd)
+  POST /api/location      body: {"lat":F,"lng":F,"accuracy":F,"ts":F}
+  GET  /api/location      latest location (or {} if never reported)
+  GET  /map               self-contained Leaflet page (for the parent WebView)
 
 Auth: if KIDWATCH_TOKEN is set, all routes require it.
   child WS   : Authorization: Bearer <token>
@@ -42,6 +45,7 @@ from aiohttp import web, WSMsgType
 TOKEN = os.environ.get("KIDWATCH_TOKEN", "")
 HERE = os.path.dirname(os.path.abspath(__file__))
 POLICY_PATH = os.path.join(HERE, "policy.json")
+STATE_PATH  = os.path.join(HERE, "state.json")
 POLICY_LOCK = asyncio.Lock()
 
 STATE = {
@@ -57,7 +61,36 @@ STATE = {
     "last_seen_ts": 0.0,     # last time we received anything from the child
     "events": [],            # tail of recent events (max 200)
     "screenshot_waiters": [],  # list[Future], resolved when next frame arrives
+    "location": None,        # {"lat":..,"lng":..,"accuracy":..,"ts":..}
 }
+
+
+def load_state():
+    try:
+        with open(STATE_PATH) as f:
+            data = json.load(f)
+        loc = data.get("location")
+        if isinstance(loc, dict) and "lat" in loc and "lng" in loc:
+            STATE["location"] = loc
+    except Exception:
+        pass
+
+
+def save_state_async():
+    # best-effort, fire-and-forget disk write of persistent portions of STATE.
+    try:
+        payload = {"location": STATE["location"]}
+        fd, tmp = tempfile.mkstemp(prefix=".state.", suffix=".json", dir=HERE)
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(tmp, STATE_PATH)
+        except Exception:
+            try: os.unlink(tmp)
+            except OSError: pass
+            raise
+    except Exception as e:
+        print(f"[relay] save_state failed: {e}")
 
 
 def load_policy():
@@ -84,6 +117,28 @@ def save_policy(p):
         print(f"[relay] save_policy failed: {e}")
 
 
+def _sanitize_location(body):
+    """Pull a well-formed {lat,lng,accuracy,ts} out of an arbitrary dict, or None."""
+    try:
+        lat = float(body.get("lat"))
+        lng = float(body.get("lng"))
+    except (TypeError, ValueError):
+        return None
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lng <= 180.0):
+        return None
+    try:
+        acc = float(body.get("accuracy", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        acc = 0.0
+    try:
+        ts = float(body.get("ts", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        ts = 0.0
+    if ts <= 0:
+        ts = time.time()
+    return {"lat": lat, "lng": lng, "accuracy": max(0.0, acc), "ts": ts}
+
+
 def _sanitize_policy(body, current):
     blocked_in = body.get("blocked", current.get("blocked", []))
     limits_in  = body.get("limits",  current.get("limits", {}))
@@ -104,6 +159,7 @@ def _sanitize_policy(body, current):
 
 
 POLICY = load_policy()
+load_state()
 
 
 def authorized(request):
@@ -199,6 +255,12 @@ async def kid_ws_handler(request):
     async with POLICY_LOCK:
         snap = dict(POLICY)
     await ws.send_str(json.dumps({"cmd": "policy", **snap}))
+    # If a parent is already watching when the child reconnects, un-pause the
+    # capture pipeline so live view resumes without manual action.
+    if STATE["parents"]:
+        await ws.send_str(json.dumps({"cmd": "stream_on"}))
+    else:
+        await ws.send_str(json.dumps({"cmd": "stream_off"}))
     try:
         async for msg in ws:
             STATE["last_seen_ts"] = time.time()
@@ -221,7 +283,9 @@ async def kid_ws_handler(request):
                 except Exception:
                     print("[relay] kid non-json:", msg.data[:120])
                     continue
-                kind = evt.get("evt")
+                # Accept either {"evt":"..."} (child events) or {"type":"..."}
+                # (spec-shaped location payloads).
+                kind = evt.get("evt") or evt.get("type")
                 if kind == "hello":
                     STATE["device"] = evt
                 elif kind == "foreground":
@@ -232,6 +296,11 @@ async def kid_ws_handler(request):
                     STATE["battery"] = evt
                 elif kind == "bedtime":
                     STATE["bedtime_active"] = bool(evt.get("active"))
+                elif kind == "location":
+                    loc = _sanitize_location(evt)
+                    if loc:
+                        STATE["location"] = loc
+                        save_state_async()
                 record_event(evt)
                 await broadcast_parents_text({"type": "event", "event": evt})
     finally:
@@ -246,8 +315,12 @@ async def parent_ws_handler(request):
         return web.Response(status=401, text="unauthorized")
     ws = web.WebSocketResponse(max_msg_size=8_000_000, heartbeat=25)
     await ws.prepare(request)
+    was_empty = len(STATE["parents"]) == 0
     STATE["parents"].add(ws)
     print(f"[relay] parent connected ({len(STATE['parents'])} total)")
+    if was_empty:
+        # First watcher online — wake the child's capture pipeline.
+        await send_to_kid({"cmd": "stream_on"})
     try:
         if STATE["frame"]:
             await ws.send_bytes(bytes(STATE["frame"]))
@@ -264,6 +337,9 @@ async def parent_ws_handler(request):
     finally:
         STATE["parents"].discard(ws)
         print("[relay] parent disconnected")
+        if not STATE["parents"]:
+            # No one is watching — tell the child to pause capture.
+            await send_to_kid({"cmd": "stream_off"})
     return ws
 
 
@@ -279,6 +355,8 @@ def _state_dict():
         "last_seen_ts": STATE["last_seen_ts"],
         "policy": POLICY,
         "events": STATE["events"][-40:],
+        "parents": len(STATE["parents"]),
+        "location": STATE["location"],
     }
 
 
@@ -517,6 +595,91 @@ async def api_apk_post(request):
 
 
 @api_auth
+async def api_location_get(request):
+    return web.json_response(STATE["location"] or {})
+
+
+@api_auth
+async def api_location_post(request):
+    body = await _read_body(request)
+    if body is None:
+        return web.json_response({"error": "bad_json"}, status=400)
+    loc = _sanitize_location(body)
+    if not loc:
+        return web.json_response({"error": "bad_field", "detail": "lat/lng"}, status=400)
+    STATE["location"] = loc
+    save_state_async()
+    # Mirror to parent dashboards so a map updates in real time, mimicking the
+    # child-WS path.
+    await broadcast_parents_text({"type": "event",
+                                  "event": {"evt": "location", **loc}})
+    return web.json_response({"ok": True, "location": loc})
+
+
+async def map_page(request):
+    """Self-contained Leaflet map served for the parent app's WebView.
+
+    The page bakes the bearer token in from the current query so the WebView
+    doesn't have to juggle auth headers.
+    """
+    token = request.query.get("token", "")
+    html = f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PerchGuard · Location</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html,body,#map {{ margin:0; padding:0; height:100%; background:#0b0d10; color:#eef1f5;
+    font-family:system-ui,sans-serif; }}
+  #info {{ position:fixed; top:10px; left:10px; z-index:1000; background:rgba(14,19,25,.85);
+    border:1px solid #1e242c; padding:8px 12px; border-radius:8px; font-size:13px;
+    line-height:1.4; }}
+</style></head><body>
+<div id="map"></div>
+<div id="info">no fix yet</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const TOKEN = {json.dumps(token)};
+const qs = TOKEN ? ("?token=" + encodeURIComponent(TOKEN)) : "";
+const info = document.getElementById("info");
+const map = L.map("map").setView([0,0], 2);
+L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png",
+  {{maxZoom: 19, attribution: "© OpenStreetMap"}}).addTo(map);
+let marker = null, circle = null;
+function fmtAgo(ts) {{
+  const s = Math.max(0, Math.round(Date.now()/1000 - ts));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.round(s/60) + "m ago";
+  if (s < 86400) return Math.round(s/3600) + "h ago";
+  return Math.round(s/86400) + "d ago";
+}}
+function paint(loc) {{
+  if (!loc || loc.lat == null) {{ info.textContent = "no fix yet"; return; }}
+  const ll = [loc.lat, loc.lng];
+  if (!marker) {{
+    marker = L.marker(ll).addTo(map);
+    circle = L.circle(ll, {{radius: Math.max(5, loc.accuracy||0), color:"#2b5bd7",
+                            fillOpacity:.12}}).addTo(map);
+    map.setView(ll, 16);
+  }} else {{
+    marker.setLatLng(ll);
+    circle.setLatLng(ll).setRadius(Math.max(5, loc.accuracy||0));
+  }}
+  info.innerHTML = `${{loc.lat.toFixed(5)}}, ${{loc.lng.toFixed(5)}}<br>`
+    + `±${{Math.round(loc.accuracy||0)}}m · ${{fmtAgo(loc.ts)}}`;
+}}
+async function tick() {{
+  try {{
+    const r = await fetch("/api/state" + qs);
+    if (r.ok) {{ const s = await r.json(); paint(s.location); }}
+  }} catch (e) {{}}
+}}
+tick(); setInterval(tick, 10000);
+</script></body></html>"""
+    return web.Response(text=html, content_type="text/html",
+                        headers={"Cache-Control": "no-store"})
+
+
+@api_auth
 async def api_limits(request):
     global POLICY
     body = await _read_body(request)
@@ -565,6 +728,9 @@ app.router.add_post("/api/action/bedtime", api_bedtime)
 app.router.add_post("/api/action/limits", api_limits)
 app.router.add_get("/api/apk",  api_apk_get)
 app.router.add_post("/api/apk", api_apk_post)
+app.router.add_get("/api/location",  api_location_get)
+app.router.add_post("/api/location", api_location_post)
+app.router.add_get("/map", map_page)
 
 if __name__ == "__main__":
     port = int(os.environ.get("KIDWATCH_PORT", "8899"))

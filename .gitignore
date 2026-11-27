@@ -4,6 +4,7 @@ parent/app/build/
 local.properties
 *.keystore
 relay/policy.json
+relay/state.json
 relay/uploads/
 relay/__pycache__/
 

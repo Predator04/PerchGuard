@@ -48,6 +48,21 @@ public final class Events {
         } catch (JSONException e) { return "{\"evt\":\"battery\"}"; }
     }
 
+    /** Spec shape: {"type":"location","lat":..,"lng":..,"accuracy":..,"ts":..}.
+     *  We also set evt=location so dashboards that key on evt still see it. */
+    public static String location(double lat, double lng, float accuracy, long tsMillis) {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("type", "location");
+            o.put("evt", "location");
+            o.put("lat", lat);
+            o.put("lng", lng);
+            o.put("accuracy", accuracy);
+            o.put("ts", tsMillis / 1000.0);
+            return o.toString();
+        } catch (JSONException e) { return "{\"type\":\"location\"}"; }
+    }
+
     /** Build and ship an ack event over the ScreenService websocket, if open. */
     public static void ackAsync(String cmd, boolean ok, String err) {
         ScreenService.sendEvent(ack(cmd, ok, err));

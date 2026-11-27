@@ -37,6 +37,8 @@ import java.util.List;
 public class MainActivity extends Activity {
     private static final int REQ_CAPTURE = 1001;
     private static final int REQ_NOTIF = 1002;
+    private static final int REQ_LOCATION = 1003;
+    private static final int REQ_LOCATION_BG = 1004;
 
     private static final int COL_BG = Color.parseColor("#080A10");
     private static final int COL_BG_2 = Color.parseColor("#0F1320");
@@ -52,7 +54,7 @@ public class MainActivity extends Activity {
     private static final int COL_INNER_HI = 0x1AFFFFFF;
 
     private MediaProjectionManager mpm;
-    private StepRow rowCapture, rowAccessibility, rowUsage, rowRelay;
+    private StepRow rowCapture, rowAccessibility, rowUsage, rowRelay, rowLocation;
     private Button startBtn;
     private EditText relayField;
     private TextView relayStatus;
@@ -92,7 +94,7 @@ public class MainActivity extends Activity {
         title.setTextColor(COL_TEXT);
 
         TextView sub = new TextView(this);
-        sub.setText("Three taps to finish setting this up for you.");
+        sub.setText("A few taps to finish setting this up for you.");
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         sub.setTextColor(COL_MUTED);
         LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
@@ -116,7 +118,13 @@ public class MainActivity extends Activity {
             "Grant when you tap Start",
             v -> requestCapture());
 
-        rowRelay = new StepRow(4, "Point to your home relay",
+        rowLocation = new StepRow(4, "Let PerchGuard see this device's location",
+            "So a parent can find the phone on a map if it's lost or the child "
+                + "takes it somewhere unexpected. Only your relay sees it.",
+            "Allow",
+            v -> requestLocationPermission());
+
+        rowRelay = new StepRow(5, "Point to your home relay",
             "Enter the address the setup script printed (ws:// or wss://).",
             "Edit below",
             v -> relayField.requestFocus());
@@ -126,6 +134,7 @@ public class MainActivity extends Activity {
         root.addView(rowAccessibility.view);
         root.addView(rowUsage.view);
         root.addView(rowCapture.view);
+        root.addView(rowLocation.view);
         root.addView(rowRelay.view);
 
         root.addView(buildRelaySection());
@@ -334,17 +343,62 @@ public class MainActivity extends Activity {
         return isValidRelay(Prefs.relayUrl(this));
     }
 
+    private boolean isLocationGranted() {
+        int fine = checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION);
+        int coarse = checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION);
+        return fine == android.content.pm.PackageManager.PERMISSION_GRANTED
+            || coarse == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestLocationPermission() {
+        if (!isLocationGranted()) {
+            requestPermissions(new String[]{
+                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION
+            }, REQ_LOCATION);
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 29
+            && checkSelfPermission(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this,
+                "For background tracking, choose \"Allow all the time\" on the next screen.",
+                Toast.LENGTH_LONG).show();
+            requestPermissions(new String[]{
+                android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            }, REQ_LOCATION_BG);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] perms, int[] results) {
+        super.onRequestPermissionsResult(requestCode, perms, results);
+        if (requestCode == REQ_LOCATION) {
+            if (isLocationGranted() && Build.VERSION.SDK_INT >= 29
+                && checkSelfPermission(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{
+                    android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                }, REQ_LOCATION_BG);
+            }
+        }
+        refreshStatus();
+    }
+
     private void refreshStatus() {
         boolean ax = isAccessibilityEnabled();
         boolean usage = isUsageAccessGranted();
         boolean capture = isCaptureRunning();
         boolean relay = isRelayValid();
+        boolean location = isLocationGranted();
 
         rowAccessibility.setGranted(ax);
         rowUsage.setGranted(usage);
         rowCapture.setGranted(capture);
+        rowLocation.setGranted(location);
         rowRelay.setGranted(relay);
 
+        // Location is strongly recommended but not strictly required to start.
         boolean allReady = ax && usage && relay;
         boolean fullyLive = allReady && capture;
 

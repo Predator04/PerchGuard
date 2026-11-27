@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PerchGuard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root { color-scheme: dark; }
   body { background:#0b0d10; margin:0; color:#eef1f5; font-family:system-ui,-apple-system,sans-serif; }
@@ -37,6 +38,8 @@
     background:#1a222c; border:1px solid #273040; color:#b8c0cc; }
   .pill.live { background:#15402a; border-color:#1f5a3a; color:#8be0a1; }
   .pill.down { background:#3a1f1f; border-color:#5a2a2a; color:#f4a3a3; }
+  #map { height: 320px; width: 100%; border-radius:8px; margin-top:6px; background:#000; }
+  .locMeta { font-size:12px; color:#8691a0; margin-top:6px; }
 </style>
 </head>
 <body>
@@ -99,10 +102,16 @@
     <h2 style="margin-top:14px;">Usage today</h2>
     <div id="usage" class="kv"></div>
 
+    <h2 style="margin-top:14px;">Location</h2>
+    <div id="map"></div>
+    <div id="locMeta" class="locMeta">No fix yet.</div>
+
     <h2 style="margin-top:14px;">Recent events</h2>
     <div id="events" class="events"></div>
   </section>
 </main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script>
 let NATIVE_W = 1116, NATIVE_H = 2484;
@@ -130,6 +139,28 @@ const usageEl = document.getElementById("usage");
 let ws = null, url = null, policy = {blocked:[], limits:{}, total_minutes:0, bedtime:{start:"",end:"",enabled:false}};
 let lastUsage = {by_pkg:{}, total_minutes:0};
 let reconnectDelay = 1000;
+
+// ---- Leaflet map ----
+const locMetaEl = document.getElementById("locMeta");
+const map = L.map("map").setView([0, 0], 2);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  {maxZoom: 19, attribution: "© OpenStreetMap"}).addTo(map);
+let locMarker = null, locCircle = null, locZoomed = false;
+function renderLocation(loc) {
+  if (!loc || loc.lat == null) { locMetaEl.textContent = "No fix yet."; return; }
+  const ll = [loc.lat, loc.lng];
+  const acc = Math.max(5, loc.accuracy || 0);
+  if (!locMarker) {
+    locMarker = L.marker(ll).addTo(map);
+    locCircle = L.circle(ll, {radius: acc, color:"#2b5bd7", fillOpacity:.12}).addTo(map);
+  } else {
+    locMarker.setLatLng(ll);
+    locCircle.setLatLng(ll).setRadius(acc);
+  }
+  if (!locZoomed) { map.setView(ll, 16); locZoomed = true; }
+  locMetaEl.textContent =
+    `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)} · ±${Math.round(loc.accuracy||0)}m · ${fmtAgo(loc.ts)}`;
+}
 
 function connect() {
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
@@ -175,6 +206,7 @@ function applyState(s) {
   if (s.device && s.device.screen) setNative(s.device.screen.w, s.device.screen.h);
   if (s.policy) { policy = s.policy; renderPolicy(); }
   if (s.usage) { lastUsage = s.usage; renderUsage(); }
+  if (s.location) renderLocation(s.location);
   (s.events || []).forEach(appendEvent);
 }
 
@@ -187,6 +219,7 @@ function applyEvent(evt) {
   if (evt.evt === "bedtime")
     bedtimeEl.textContent = evt.active ? "bedtime: active" : "";
   if (evt.evt === "usage_daily") { lastUsage = evt; renderUsage(); }
+  if (evt.evt === "location" || evt.type === "location") renderLocation(evt);
 }
 
 function appendEvent(evt) {

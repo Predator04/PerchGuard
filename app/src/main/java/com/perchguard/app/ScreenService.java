@@ -8,6 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
@@ -17,6 +18,7 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -58,7 +60,12 @@ public class ScreenService extends Service {
 
     private static final int CAP_W = 540;
     private static final int CAP_H = 1200;
-    private static final long FRAME_INTERVAL_NS = 250_000_000L; // ~4 fps awareness stream
+    // Adaptive frame intervals — see pickFrameIntervalNs(). We default to the
+    // "watching, battery OK" cadence so the first frame after start is quick.
+    private static final long FRAME_INTERVAL_WATCH_NS    = 100_000_000L; //  ~10 fps
+    private static final long FRAME_INTERVAL_CHARGING_NS =  66_000_000L; //  ~15 fps
+    private static final long FRAME_INTERVAL_LOW_NS      = 333_000_000L; //   ~3 fps
+    private static final int  JPEG_QUALITY = 55;
 
     private static volatile ScreenService instance;
 
@@ -66,13 +73,20 @@ public class ScreenService extends Service {
     private MediaProjection.Callback projectionCallback;
     private VirtualDisplay virtualDisplay;
     private ImageReader imageReader;
+    // Cached consent so we can tear capture down on stream_off and spin it back
+    // up on stream_on without re-prompting the user.
+    private int cachedResultCode = Activity.RESULT_CANCELED;
+    private Intent cachedResultData;
     private HandlerThread handlerThread;
     private Handler handler;
     private OkHttpClient client;
     private volatile WebSocket webSocket;
     private volatile boolean streaming = false;
+    // Parent-driven: true when at least one dashboard/parent app is watching.
+    private volatile boolean watcherActive = false;
     private volatile boolean sendOneFrame = false;
     private volatile boolean connecting = false;
+    private volatile long frameIntervalNs = FRAME_INTERVAL_WATCH_NS;
     private long lastSentNs = 0;
     private String relayUrl;
     private int deviceW = 1080, deviceH = 2400, deviceDpi = 240;
@@ -119,11 +133,19 @@ public class ScreenService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && virtualDisplay == null) {
+        if (intent != null) {
             int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED);
             Intent data = intent.getParcelableExtra(EXTRA_RESULT_DATA);
             if (resultCode == Activity.RESULT_OK && data != null) {
-                startCapture(resultCode, data);
+                // Cache so we can rebuild the pipeline on stream_on without a
+                // fresh consent prompt. Capture starts in the "idle" state;
+                // the relay's stream_on command (sent when a parent is
+                // watching) brings up the VirtualDisplay.
+                cachedResultCode = resultCode;
+                cachedResultData = data;
+                if (mediaProjection == null) {
+                    initProjection(resultCode, data);
+                }
             }
         }
         // Pick up any relay URL change from Settings.
@@ -146,7 +168,10 @@ public class ScreenService extends Service {
         return START_STICKY;
     }
 
-    private void startCapture(int resultCode, Intent data) {
+    /** One-time: build MediaProjection from the user's consent. We keep this
+     *  alive for the life of the service but only wire up a VirtualDisplay
+     *  when a parent is actively watching. */
+    private void initProjection(int resultCode, Intent data) {
         MediaProjectionManager mpm =
             (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         mediaProjection = mpm.getMediaProjection(resultCode, data);
@@ -161,20 +186,68 @@ public class ScreenService extends Service {
             }
         };
         mediaProjection.registerCallback(projectionCallback, handler);
+    }
 
+    /** Create the VirtualDisplay + ImageReader on demand. Idempotent. */
+    private synchronized void beginCapture() {
+        if (mediaProjection == null || virtualDisplay != null) return;
         imageReader = ImageReader.newInstance(CAP_W, CAP_H, PixelFormat.RGBA_8888, 2);
         virtualDisplay = mediaProjection.createVirtualDisplay(
             "PerchGuard", CAP_W, CAP_H, 240,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             imageReader.getSurface(), null, handler);
         imageReader.setOnImageAvailableListener(this::onImage, handler);
-        Log.i(TAG, "capture started " + CAP_W + "x" + CAP_H);
+        updateFrameInterval();
+        Log.i(TAG, "capture started " + CAP_W + "x" + CAP_H
+            + " @ interval " + (frameIntervalNs / 1_000_000) + "ms");
+    }
+
+    /** Release the VirtualDisplay + ImageReader. MediaProjection stays alive
+     *  so we can resume without re-prompting. */
+    private synchronized void endCapture() {
+        if (imageReader != null) {
+            try { imageReader.setOnImageAvailableListener(null, null); }
+            catch (Exception ignored) {}
+            try { imageReader.close(); } catch (Exception ignored) {}
+            imageReader = null;
+        }
+        if (virtualDisplay != null) {
+            try { virtualDisplay.release(); } catch (Exception ignored) {}
+            virtualDisplay = null;
+        }
+        lastSentNs = 0;
+        Log.i(TAG, "capture paused (no parent watching)");
+    }
+
+    private void updateFrameInterval() {
+        frameIntervalNs = pickFrameIntervalNs();
+    }
+
+    private long pickFrameIntervalNs() {
+        try {
+            IntentFilter f = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+            Intent i = registerReceiver(null, f);
+            if (i == null) return FRAME_INTERVAL_WATCH_NS;
+            int l = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+            int pct = (l >= 0) ? (int) Math.round(l * 100.0 / scale) : 100;
+            int status = i.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+            boolean charging = status == BatteryManager.BATTERY_STATUS_CHARGING
+                || status == BatteryManager.BATTERY_STATUS_FULL
+                || i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0;
+            if (pct >= 0 && pct < 20 && !charging) return FRAME_INTERVAL_LOW_NS;
+            if (charging) return FRAME_INTERVAL_CHARGING_NS;
+            return FRAME_INTERVAL_WATCH_NS;
+        } catch (Exception e) {
+            return FRAME_INTERVAL_WATCH_NS;
+        }
     }
 
     private void onImage(ImageReader reader) {
         long now = System.nanoTime();
         boolean forced = sendOneFrame;
-        if (!forced && now - lastSentNs < FRAME_INTERVAL_NS) {
+        long interval = frameIntervalNs;
+        if (!forced && now - lastSentNs < interval) {
             Image dropped = reader.acquireLatestImage();
             if (dropped != null) dropped.close();
             return;
@@ -184,6 +257,9 @@ public class ScreenService extends Service {
             image = reader.acquireLatestImage();
             if (image == null || webSocket == null) return;
             if (!streaming && !forced) return;
+            // If no one is watching, skip encoding entirely except for the
+            // one-shot screenshot path.
+            if (!watcherActive && !forced) return;
             byte[] jpeg = toJpeg(image);
             if (jpeg != null) {
                 lastSentNs = now;
@@ -210,7 +286,7 @@ public class ScreenService extends Service {
         Bitmap cropped = (bmpW == CAP_W) ? padded
             : Bitmap.createBitmap(padded, 0, 0, CAP_W, CAP_H);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        cropped.compress(Bitmap.CompressFormat.JPEG, 60, baos);
+        cropped.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, baos);
         if (cropped != padded) cropped.recycle();
         padded.recycle();
         return baos.toByteArray();
@@ -292,6 +368,22 @@ public class ScreenService extends Service {
                 }
                 case "screenshot": {
                     sendOneFrame = true;
+                    // If capture is paused for battery, briefly spin it up so
+                    // the next frame actually exists.
+                    handler.post(this::beginCapture);
+                    ack(cmd, true, null);
+                    break;
+                }
+                case "stream_on": {
+                    watcherActive = true;
+                    updateFrameInterval();
+                    handler.post(this::beginCapture);
+                    ack(cmd, true, null);
+                    break;
+                }
+                case "stream_off": {
+                    watcherActive = false;
+                    handler.post(this::endCapture);
                     ack(cmd, true, null);
                     break;
                 }
@@ -381,6 +473,13 @@ public class ScreenService extends Service {
     public static void requestScreenshot() {
         ScreenService svc = instance;
         if (svc != null) svc.sendOneFrame = true;
+    }
+
+    /** Called by GuardService every ~minute so the frame interval tracks the
+     *  current battery state without extra wakeups of our own. */
+    public static void refreshAdaptiveFps() {
+        ScreenService svc = instance;
+        if (svc != null) svc.updateFrameInterval();
     }
 
     public static boolean isRunning() {

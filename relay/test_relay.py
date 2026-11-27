@@ -39,6 +39,22 @@ def http(method, url, token=None, body=None):
         return e.code, e.read()
 
 
+async def _wait_location_mirror(parent_ws):
+    try:
+        for _ in range(6):
+            m = await asyncio.wait_for(parent_ws.receive(), timeout=2)
+            if m.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(m.data)
+                evt = data.get("event") or {}
+                if data.get("type") == "event" \
+                   and (evt.get("evt") == "location"
+                        or evt.get("type") == "location"):
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 async def run_tests(port):
     base = f"http://127.0.0.1:{port}"
     ws_base = f"ws://127.0.0.1:{port}"
@@ -102,6 +118,12 @@ async def run_tests(port):
         obj = json.loads(policy_msg.data)
         check("kid receives policy on connect", obj.get("cmd") == "policy"
               and obj.get("blocked") == ["com.evil.app"])
+        # With no parent connected, the relay should immediately tell the
+        # child to idle its capture pipeline (battery win).
+        off_msg = await asyncio.wait_for(kid_ws.receive(), timeout=2)
+        off_obj = json.loads(off_msg.data)
+        check("kid receives stream_off on lone connect",
+              off_obj.get("cmd") == "stream_off")
 
         await kid_ws.send_str(json.dumps({"evt": "hello", "device": "test-model"}))
         await kid_ws.send_str(json.dumps({"evt": "foreground", "pkg": "com.ok.app"}))
@@ -111,6 +133,15 @@ async def run_tests(port):
 
         # parent connects and should receive latest frame + state snapshot
         parent_ws = await sess.ws_connect(ws_base + f"/parent/view?token={TOKEN}", timeout=5)
+        # First-parent-connect should fire a stream_on toward the kid.
+        got_stream_on = False
+        for _ in range(4):
+            m = await asyncio.wait_for(kid_ws.receive(), timeout=2)
+            if m.type == aiohttp.WSMsgType.TEXT and '"stream_on"' in m.data:
+                got_stream_on = True
+                break
+        check("parent connect triggers stream_on", got_stream_on)
+
         got_frame, got_state = False, False
         for _ in range(4):
             m = await asyncio.wait_for(parent_ws.receive(), timeout=2)
@@ -188,6 +219,40 @@ async def run_tests(port):
         st = json.loads(b)
         check("block appears in policy", "com.added.app" in st["policy"].get("blocked", []))
 
+        # 12a. kid pushes a location event — relay stores it + shows it in state
+        loc_evt = {"type": "location", "lat": 37.7749, "lng": -122.4194,
+                   "accuracy": 12.0, "ts": time.time()}
+        await kid_ws.send_str(json.dumps(loc_evt))
+        await asyncio.sleep(0.2)
+        s, b = http("GET", base + "/api/state", token=TOKEN)
+        st = json.loads(b)
+        loc = st.get("location") or {}
+        check("state carries location", abs(loc.get("lat", 0) - 37.7749) < 1e-6
+              and abs(loc.get("lng", 0) - (-122.4194)) < 1e-6
+              and loc.get("accuracy") == 12.0)
+
+        # 12a.1 — bad lat/lng is rejected
+        await kid_ws.send_str(json.dumps({"type": "location", "lat": "nope", "lng": 1}))
+        await asyncio.sleep(0.2)
+        s, b = http("GET", base + "/api/state", token=TOKEN)
+        loc2 = json.loads(b).get("location") or {}
+        check("bad location ignored, previous retained",
+              abs(loc2.get("lat", 0) - 37.7749) < 1e-6)
+
+        # 12a.2 — HTTP POST /api/location updates + mirrors to parent WS
+        got_mirror = asyncio.create_task(_wait_location_mirror(parent_ws))
+        got = await loop.run_in_executor(None, lambda: http("POST",
+            base + "/api/location", token=TOKEN,
+            body={"lat": 40.7128, "lng": -74.0060, "accuracy": 7.5}))
+        check("POST /api/location -> 200", got[0] == 200, f"got {got[0]}")
+        mirrored = await got_mirror
+        check("parent WS sees location event mirror", mirrored)
+
+        # 12a.3 — GET /map renders Leaflet HTML (contains the CDN)
+        s, b = http("GET", base + "/map?token=" + TOKEN)
+        check("/map -> 200", s == 200, f"got {s}")
+        check("/map carries Leaflet", b"leaflet" in b.lower())
+
         # 12b. /api/apk POST (raw bytes) stores + tells child via install_apk
         async def wait_install():
             try:
@@ -223,6 +288,19 @@ async def run_tests(port):
         s, _ = http("GET", base + "/api/apk")
         check("apk GET w/o token -> 401", s == 401, f"got {s}")
 
+        # 12e. closing the last parent fires stream_off at the kid.
+        await parent_ws.close()
+        got_stream_off = False
+        for _ in range(8):
+            try:
+                m = await asyncio.wait_for(kid_ws.receive(), timeout=2)
+            except asyncio.TimeoutError:
+                break
+            if m.type == aiohttp.WSMsgType.TEXT and '"stream_off"' in m.data:
+                got_stream_off = True
+                break
+        check("last parent disconnect -> stream_off", got_stream_off)
+
         # 13. second kid connection supersedes first
         kid_ws2 = await sess.ws_connect(ws_base + "/kid/stream", headers=headers, timeout=5)
         # drain messages on old socket until we see the server-initiated close
@@ -237,7 +315,6 @@ async def run_tests(port):
             superseded = kid_ws.closed
         check("prior kid superseded", superseded or kid_ws.closed)
         await kid_ws2.close()
-        await parent_ws.close()
 
     # 14. persistence across restart — verify policy.json present
     pf = os.path.join(HERE, "policy.json")
@@ -257,9 +334,11 @@ async def run_tests(port):
 def main():
     port = free_port()
     env = dict(os.environ, KIDWATCH_TOKEN=TOKEN, KIDWATCH_PORT=str(port))
-    # Remove any pre-existing policy.json so tests are clean
+    # Remove any pre-existing policy.json / state.json so tests are clean
     pf = os.path.join(HERE, "policy.json")
     if os.path.exists(pf): os.remove(pf)
+    sf = os.path.join(HERE, "state.json")
+    if os.path.exists(sf): os.remove(sf)
     uploaded = os.path.join(HERE, "uploads", "app.apk")
     if os.path.exists(uploaded):
         try: os.remove(uploaded)

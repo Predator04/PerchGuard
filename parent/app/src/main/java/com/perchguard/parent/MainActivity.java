@@ -107,13 +107,20 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams spLp = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
 
+        android.widget.Button mapBtn = Ui.button(this, "Map");
         android.widget.Button limitsBtn = Ui.button(this, "Limits");
         android.widget.Button settingsBtn = Ui.button(this, "Settings");
+        mapBtn.setOnClickListener(v -> startActivity(new Intent(this, LocationActivity.class)));
         limitsBtn.setOnClickListener(v -> startActivity(new Intent(this, LimitsActivity.class)));
         settingsBtn.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
 
         top.addView(statusPill);
         top.addView(spacer, spLp);
+        top.addView(mapBtn);
+        LinearLayout.LayoutParams limitsLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        limitsLp.leftMargin = Ui.dp(this, 8);
+        limitsBtn.setLayoutParams(limitsLp);
         top.addView(limitsBtn);
         LinearLayout.LayoutParams margin = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
