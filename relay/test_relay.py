@@ -361,22 +361,23 @@ async def run_tests(port):
     return len(failed) == 0
 
 
+def _clean_state_files():
+    """Delete every file the relay creates under HERE so the suite leaves no trace."""
+    for path in (
+        os.path.join(HERE, "policy.json"),
+        os.path.join(HERE, "state.json"),
+        os.path.join(HERE, "uploads", "app.apk"),
+        os.path.join(HERE, "crash.log"),
+    ):
+        if os.path.exists(path):
+            try: os.remove(path)
+            except OSError: pass
+
+
 def main():
     port = free_port()
     env = dict(os.environ, KIDWATCH_TOKEN=TOKEN, KIDWATCH_PORT=str(port))
-    # Remove any pre-existing policy.json / state.json so tests are clean
-    pf = os.path.join(HERE, "policy.json")
-    if os.path.exists(pf): os.remove(pf)
-    sf = os.path.join(HERE, "state.json")
-    if os.path.exists(sf): os.remove(sf)
-    uploaded = os.path.join(HERE, "uploads", "app.apk")
-    if os.path.exists(uploaded):
-        try: os.remove(uploaded)
-        except OSError: pass
-    crash_log = os.path.join(HERE, "crash.log")
-    if os.path.exists(crash_log):
-        try: os.remove(crash_log)
-        except OSError: pass
+    _clean_state_files()
     proc = subprocess.Popen([sys.executable, os.path.join(HERE, "relay.py")],
                             env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
@@ -393,6 +394,7 @@ def main():
         proc.terminate()
         try: proc.wait(timeout=3)
         except subprocess.TimeoutExpired: proc.kill()
+        _clean_state_files()
 
 
 if __name__ == "__main__":

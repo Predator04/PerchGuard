@@ -79,6 +79,13 @@ public class BlockActivity extends Activity {
     }
 
     private void showParentPin() {
+        String stored = Prefs.parentPin(this);
+        if (stored == null || stored.isEmpty()) {
+            Toast.makeText(this,
+                "No parent PIN set — open PerchGuard to set one.",
+                Toast.LENGTH_LONG).show();
+            return;
+        }
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
         input.setHint("Parent PIN");

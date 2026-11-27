@@ -29,6 +29,12 @@ import android.widget.Toast;
 
 import java.util.List;
 
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+
 /**
  * MainActivity — the "set it up for me" wizard.
  *
@@ -330,8 +336,40 @@ public class MainActivity extends Activity {
         Policy.get(this).suspendFor(this, 30);
         stopService(new Intent(this, ScreenService.class));
         stopService(new Intent(this, GuardService.class));
+        clearRelayPolicyAsync();
         Toast.makeText(this, "All rules cleared — blocking paused 30 min.", Toast.LENGTH_LONG).show();
         refreshStatus();
+    }
+
+    /**
+     * Best-effort POST of an empty policy to the relay so the next re-push
+     * doesn't reinstate the block after the local grace window expires.
+     */
+    private void clearRelayPolicyAsync() {
+        final String ws = Prefs.relayUrl(this);
+        final String token = Prefs.authToken(this);
+        if (ws == null || ws.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                String http = ws;
+                if (http.startsWith("wss://")) http = "https://" + http.substring(6);
+                else if (http.startsWith("ws://")) http = "http://" + http.substring(5);
+                int cut = http.indexOf("/kid/stream");
+                if (cut >= 0) http = http.substring(0, cut);
+                String url = http + "/api/policy";
+                String body = "{\"blocked\":[],\"limits\":{},\"total_minutes\":0,"
+                    + "\"bedtime\":{\"start\":\"00:00\",\"end\":\"00:00\",\"enabled\":false}}";
+                OkHttpClient client = new OkHttpClient();
+                Request req = new Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer " + token)
+                    .post(RequestBody.create(MediaType.parse("application/json"), body))
+                    .build();
+                try (Response r = client.newCall(req).execute()) {
+                    // fire-and-forget
+                }
+            } catch (Exception ignored) {}
+        }, "emergency-clear-relay").start();
     }
 
     private View buildPinSection() {
@@ -342,21 +380,27 @@ public class MainActivity extends Activity {
         lp.topMargin = dp(6);
         wrap.setLayoutParams(lp);
 
+        boolean pinUnset = Prefs.parentPin(this) == null || Prefs.parentPin(this).isEmpty();
+
         final TextView toggle = new TextView(this);
-        toggle.setText("▸ Parent unlock PIN");
-        toggle.setTextColor(COL_MUTED);
+        toggle.setText((pinUnset ? "▾" : "▸") + " Parent unlock PIN"
+            + (pinUnset ? " — not set, tap to set" : ""));
+        toggle.setTextColor(pinUnset ? COL_PENDING : COL_MUTED);
         toggle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         toggle.setPadding(dp(4), dp(12), dp(4), dp(12));
         wrap.addView(toggle);
 
         final View body = buildPinBody();
-        body.setVisibility(View.GONE);
+        body.setVisibility(pinUnset ? View.VISIBLE : View.GONE);
         wrap.addView(body);
 
         toggle.setOnClickListener(v -> {
             boolean showing = body.getVisibility() == View.VISIBLE;
             body.setVisibility(showing ? View.GONE : View.VISIBLE);
-            toggle.setText((showing ? "▸" : "▾") + " Parent unlock PIN");
+            boolean nowUnset = Prefs.parentPin(this) == null || Prefs.parentPin(this).isEmpty();
+            toggle.setText((showing ? "▸" : "▾") + " Parent unlock PIN"
+                + (nowUnset ? " — not set, tap to set" : ""));
+            toggle.setTextColor(nowUnset ? COL_PENDING : COL_MUTED);
         });
         return wrap;
     }
@@ -370,7 +414,8 @@ public class MainActivity extends Activity {
         box.setPadding(pad, pad, pad, pad);
 
         TextView help = new TextView(this);
-        help.setText("Used on the block screen to pause blocking. Default is 1234 — change it.");
+        help.setText("Used on the block screen to pause blocking. "
+            + "Until you set one, the block screen cannot be unlocked.");
         help.setTextColor(COL_MUTED);
         help.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         help.setPadding(0, 0, 0, dp(8));

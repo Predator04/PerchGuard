@@ -16,7 +16,8 @@ public final class Prefs {
 
     public static final String KEY_PARENT_PIN = "parent_pin";
     public static final String KEY_SUSPEND_UNTIL = "suspend_until";
-    public static final String DEFAULT_PARENT_PIN = "1234";
+    // Empty means "not set" — the block screen refuses to unlock until the parent sets one.
+    public static final String DEFAULT_PARENT_PIN = "";
 
     public static SharedPreferences get(Context ctx) {
         return ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE);

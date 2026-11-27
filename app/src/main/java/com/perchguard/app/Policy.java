@@ -1,7 +1,10 @@
 package com.perchguard.app;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -9,6 +12,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -55,6 +59,9 @@ public final class Policy {
         BEDTIME_WHITELIST.add("com.google.android.permissioncontroller");
     }
 
+    // Dynamic home-launcher packages resolved at runtime (Pixel, Samsung, Xiaomi, etc.).
+    private volatile Set<String> dynamicWhitelist = Collections.emptySet();
+
     public static synchronized Policy get(Context ctx) {
         if (INSTANCE == null) {
             INSTANCE = new Policy();
@@ -67,8 +74,29 @@ public final class Policy {
         if (pkg == null) return false;
         if (System.currentTimeMillis() < suspendedUntil) return false;  // parent paused blocking
         if (blocked.contains(pkg)) return true;
-        if (bedtimeEnabled && isBedtimeNow() && !BEDTIME_WHITELIST.contains(pkg)) return true;
+        if (bedtimeEnabled && isBedtimeNow()
+            && !BEDTIME_WHITELIST.contains(pkg)
+            && !dynamicWhitelist.contains(pkg)) return true;
         return false;
+    }
+
+    public void refreshDynamicWhitelist(Context ctx) {
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+            Set<String> found = new HashSet<>();
+            ResolveInfo ri = pm.resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY);
+            if (ri != null && ri.activityInfo != null) {
+                if (ri.activityInfo.packageName != null) found.add(ri.activityInfo.packageName);
+                if (ri.activityInfo.applicationInfo != null
+                    && ri.activityInfo.applicationInfo.packageName != null) {
+                    found.add(ri.activityInfo.applicationInfo.packageName);
+                }
+            }
+            dynamicWhitelist = found;
+        } catch (Exception e) {
+            Log.w(TAG, "refreshDynamicWhitelist", e);
+        }
     }
 
     public synchronized boolean isBedtimeNow() {
@@ -185,10 +213,12 @@ public final class Policy {
     public synchronized void save(Context ctx) {
         SharedPreferences sp = Prefs.get(ctx);
         sp.edit().putString(Prefs.KEY_POLICY_JSON, toJson().toString()).apply();
+        refreshDynamicWhitelist(ctx);
     }
 
     public synchronized void load(Context ctx) {
         suspendedUntil = Prefs.get(ctx).getLong(Prefs.KEY_SUSPEND_UNTIL, 0);
+        refreshDynamicWhitelist(ctx);
         String raw = Prefs.get(ctx).getString(Prefs.KEY_POLICY_JSON, "");
         if (raw.isEmpty()) return;
         try {
