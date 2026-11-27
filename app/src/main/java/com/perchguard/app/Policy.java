@@ -37,6 +37,7 @@ public final class Policy {
     public String bedtimeStart = "";
     public String bedtimeEnd = "";
     public boolean bedtimeEnabled = false;
+    public volatile long suspendedUntil = 0;  // epoch ms; blocking paused until then
 
     // Self-package is always whitelisted during bedtime so the parent can still reach the app.
     public static final Set<String> BEDTIME_WHITELIST = new HashSet<>();
@@ -47,6 +48,11 @@ public final class Policy {
         BEDTIME_WHITELIST.add("com.android.emergency");
         BEDTIME_WHITELIST.add("com.android.systemui");
         BEDTIME_WHITELIST.add("android");
+        BEDTIME_WHITELIST.add("com.android.settings");
+        BEDTIME_WHITELIST.add("com.android.launcher3");
+        BEDTIME_WHITELIST.add("com.oneplus.launcher");
+        BEDTIME_WHITELIST.add("com.android.permissioncontroller");
+        BEDTIME_WHITELIST.add("com.google.android.permissioncontroller");
     }
 
     public static synchronized Policy get(Context ctx) {
@@ -59,6 +65,7 @@ public final class Policy {
 
     public synchronized boolean isBlocked(String pkg) {
         if (pkg == null) return false;
+        if (System.currentTimeMillis() < suspendedUntil) return false;  // parent paused blocking
         if (blocked.contains(pkg)) return true;
         if (bedtimeEnabled && isBedtimeNow() && !BEDTIME_WHITELIST.contains(pkg)) return true;
         return false;
@@ -96,6 +103,28 @@ public final class Policy {
         bedtimeStart = start != null ? start : "";
         bedtimeEnd = end != null ? end : "";
         bedtimeEnabled = enabled;
+    }
+
+    /** Parent escape: pause all blocking for `minutes` (survives reboot + policy pushes). */
+    public synchronized void suspendFor(Context ctx, long minutes) {
+        suspendedUntil = System.currentTimeMillis() + minutes * 60_000L;
+        Prefs.get(ctx).edit().putLong(Prefs.KEY_SUSPEND_UNTIL, suspendedUntil).apply();
+    }
+
+    public synchronized void clearSuspension(Context ctx) {
+        suspendedUntil = 0;
+        Prefs.get(ctx).edit().remove(Prefs.KEY_SUSPEND_UNTIL).apply();
+    }
+
+    /** Emergency stop: wipe all rules so nothing can block, then persist. */
+    public synchronized void clearAll(Context ctx) {
+        blocked.clear();
+        limits.clear();
+        totalMinutes = 0;
+        bedtimeStart = "";
+        bedtimeEnd = "";
+        bedtimeEnabled = false;
+        save(ctx);
     }
 
     public synchronized void replaceAll(JSONObject root) throws JSONException {
@@ -159,6 +188,7 @@ public final class Policy {
     }
 
     public synchronized void load(Context ctx) {
+        suspendedUntil = Prefs.get(ctx).getLong(Prefs.KEY_SUSPEND_UNTIL, 0);
         String raw = Prefs.get(ctx).getString(Prefs.KEY_POLICY_JSON, "");
         if (raw.isEmpty()) return;
         try {

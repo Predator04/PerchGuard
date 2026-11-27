@@ -21,11 +21,14 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import okhttp3.Call;
@@ -48,6 +51,35 @@ public class LimitsActivity extends Activity {
     private TextView statusLine;
 
     private final Map<String, Row> rows = new HashMap<>();
+
+    private static final SimpleDateFormat FMT_12 =
+        new SimpleDateFormat("h:mm a", Locale.US);
+    private static final SimpleDateFormat FMT_24 =
+        new SimpleDateFormat("HH:mm", Locale.US);
+
+    /** "20:00" → "8:00 PM". Returns "" if input is blank or malformed. */
+    static String to12h(String hhmm) {
+        if (hhmm == null || hhmm.trim().isEmpty()) return "";
+        try {
+            Date d = FMT_24.parse(hhmm.trim());
+            return d == null ? "" : FMT_12.format(d);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** "8:00 PM" → "20:00". Returns null if unparseable. */
+    static String to24h(String display) {
+        if (display == null) return null;
+        String s = display.trim().toUpperCase(Locale.US);
+        if (s.isEmpty()) return null;
+        try {
+            Date d = FMT_12.parse(s);
+            return d == null ? null : FMT_24.format(d);
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     private static final class Row {
         final CheckBox block;
@@ -108,8 +140,8 @@ public class LimitsActivity extends Activity {
         bedRowLp.topMargin = Ui.dp(this, 6);
         bedRow.setLayoutParams(bedRowLp);
 
-        bedStartField = Ui.edit(this, "Start HH:MM", "20:00", false);
-        bedEndField   = Ui.edit(this, "End HH:MM", "07:00", false);
+        bedStartField = Ui.edit(this, "Start (e.g. 8:00 PM)", "8:00 PM", false);
+        bedEndField   = Ui.edit(this, "End (e.g. 7:00 AM)", "7:00 AM", false);
         LinearLayout.LayoutParams bsLp = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         LinearLayout.LayoutParams beLp2 = new LinearLayout.LayoutParams(0,
@@ -310,8 +342,8 @@ public class LimitsActivity extends Activity {
 
             totalMinutesField.setText(String.valueOf(totalMins));
             if (bedtime != null) {
-                bedStartField.setText(bedtime.optString("start", "20:00"));
-                bedEndField.setText(bedtime.optString("end", "07:00"));
+                bedStartField.setText(to12h(bedtime.optString("start", "20:00")));
+                bedEndField.setText(to12h(bedtime.optString("end", "07:00")));
                 bedEnabled.setChecked(bedtime.optBoolean("enabled", false));
             }
             statusLine.setText("Loaded " + sorted.size() + " app(s).");
@@ -329,9 +361,15 @@ public class LimitsActivity extends Activity {
                 int m = parseInt(e.getValue().minutes.getText().toString(), 0);
                 if (m > 0) limits.put(e.getKey(), m);
             }
+            String start24 = to24h(bedStartField.getText().toString());
+            String end24   = to24h(bedEndField.getText().toString());
+            if (start24 == null || end24 == null) {
+                statusLine.setText("Bedtime must look like \"8:00 PM\".");
+                return;
+            }
             JSONObject bedtime = new JSONObject();
-            bedtime.put("start", bedStartField.getText().toString().trim());
-            bedtime.put("end", bedEndField.getText().toString().trim());
+            bedtime.put("start", start24);
+            bedtime.put("end", end24);
             bedtime.put("enabled", bedEnabled.isChecked());
 
             JSONObject body = new JSONObject();

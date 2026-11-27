@@ -3,6 +3,8 @@ package com.perchguard.app;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.Activity;
 import android.app.AppOpsManager;
+import android.app.admin.DevicePolicyManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
@@ -39,6 +41,7 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIF = 1002;
     private static final int REQ_LOCATION = 1003;
     private static final int REQ_LOCATION_BG = 1004;
+    private static final int REQ_DEVICE_ADMIN = 1005;
 
     private static final int COL_BG = Color.parseColor("#080A10");
     private static final int COL_BG_2 = Color.parseColor("#0F1320");
@@ -54,7 +57,7 @@ public class MainActivity extends Activity {
     private static final int COL_INNER_HI = 0x1AFFFFFF;
 
     private MediaProjectionManager mpm;
-    private StepRow rowCapture, rowAccessibility, rowUsage, rowRelay, rowLocation;
+    private StepRow rowCapture, rowAccessibility, rowUsage, rowRelay, rowLocation, rowAdmin;
     private Button startBtn;
     private EditText relayField;
     private TextView relayStatus;
@@ -129,6 +132,12 @@ public class MainActivity extends Activity {
             "Edit below",
             v -> relayField.requestFocus());
 
+        rowAdmin = new StepRow(6, "Lock this app on",
+            "So the app can't be removed without the parent's PIN. "
+                + "Recommended, not required.",
+            "Turn on",
+            v -> requestDeviceAdmin());
+
         root.addView(title);
         root.addView(sub);
         root.addView(rowAccessibility.view);
@@ -136,8 +145,10 @@ public class MainActivity extends Activity {
         root.addView(rowCapture.view);
         root.addView(rowLocation.view);
         root.addView(rowRelay.view);
+        root.addView(rowAdmin.view);
 
         root.addView(buildRelaySection());
+        root.addView(buildPinSection());
 
         startBtn = new Button(this);
         startBtn.setText("Start monitoring");
@@ -168,6 +179,22 @@ public class MainActivity extends Activity {
             refreshStatus();
         });
         root.addView(stopLink);
+
+        Button emergencyBtn = new Button(this);
+        emergencyBtn.setText("Emergency stop — unlock everything");
+        emergencyBtn.setAllCaps(false);
+        emergencyBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        emergencyBtn.setTextColor(Color.WHITE);
+        GradientDrawable ebg = new GradientDrawable();
+        ebg.setColor(Color.parseColor("#7A2E2E"));
+        ebg.setCornerRadius(dp(14));
+        emergencyBtn.setBackground(ebg);
+        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
+        elp.topMargin = dp(12);
+        emergencyBtn.setLayoutParams(elp);
+        emergencyBtn.setOnClickListener(v -> emergencyStop());
+        root.addView(emergencyBtn);
 
         Button updateBtn = new Button(this);
         updateBtn.setText("Check for updates");
@@ -298,6 +325,98 @@ public class MainActivity extends Activity {
         refreshStatus();
     }
 
+    private void emergencyStop() {
+        Policy.get(this).clearAll(this);
+        Policy.get(this).suspendFor(this, 30);
+        stopService(new Intent(this, ScreenService.class));
+        stopService(new Intent(this, GuardService.class));
+        Toast.makeText(this, "All rules cleared — blocking paused 30 min.", Toast.LENGTH_LONG).show();
+        refreshStatus();
+    }
+
+    private View buildPinSection() {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(6);
+        wrap.setLayoutParams(lp);
+
+        final TextView toggle = new TextView(this);
+        toggle.setText("▸ Parent unlock PIN");
+        toggle.setTextColor(COL_MUTED);
+        toggle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        toggle.setPadding(dp(4), dp(12), dp(4), dp(12));
+        wrap.addView(toggle);
+
+        final View body = buildPinBody();
+        body.setVisibility(View.GONE);
+        wrap.addView(body);
+
+        toggle.setOnClickListener(v -> {
+            boolean showing = body.getVisibility() == View.VISIBLE;
+            body.setVisibility(showing ? View.GONE : View.VISIBLE);
+            toggle.setText((showing ? "▸" : "▾") + " Parent unlock PIN");
+        });
+        return wrap;
+    }
+
+    private View buildPinBody() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackground(glassCard(14));
+        if (Build.VERSION.SDK_INT >= 21) box.setElevation(dp(2));
+        int pad = dp(14);
+        box.setPadding(pad, pad, pad, pad);
+
+        TextView help = new TextView(this);
+        help.setText("Used on the block screen to pause blocking. Default is 1234 — change it.");
+        help.setTextColor(COL_MUTED);
+        help.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        help.setPadding(0, 0, 0, dp(8));
+        box.addView(help);
+
+        final EditText pinField = new EditText(this);
+        pinField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        pinField.setText(Prefs.parentPin(this));
+        pinField.setTextColor(COL_TEXT);
+        pinField.setHintTextColor(COL_MUTED);
+        pinField.setHint("4-digit PIN");
+        pinField.setSingleLine(true);
+        GradientDrawable fieldBg = new GradientDrawable();
+        fieldBg.setColor(Color.parseColor("#11151a"));
+        fieldBg.setCornerRadius(dp(8));
+        fieldBg.setStroke(dp(1), COL_CARD_EDGE);
+        pinField.setBackground(fieldBg);
+        pinField.setPadding(dp(14), dp(12), dp(14), dp(12));
+        box.addView(pinField);
+
+        Button save = new Button(this);
+        save.setText("Save PIN");
+        save.setAllCaps(false);
+        save.setTextColor(Color.WHITE);
+        GradientDrawable sbg = new GradientDrawable();
+        sbg.setColor(COL_ACCENT_DIM);
+        sbg.setCornerRadius(dp(10));
+        save.setBackground(sbg);
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, dp(42));
+        sl.topMargin = dp(10);
+        save.setLayoutParams(sl);
+        save.setOnClickListener(v -> {
+            String pin = pinField.getText().toString().trim();
+            if (pin.isEmpty()) {
+                Toast.makeText(MainActivity.this, "Enter a PIN.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Prefs.setParentPin(MainActivity.this, pin);
+            Toast.makeText(MainActivity.this, "PIN saved.", Toast.LENGTH_SHORT).show();
+        });
+        box.addView(save);
+
+        return box;
+    }
+
     private static boolean isValidRelay(String url) {
         return url != null && (url.startsWith("ws://") || url.startsWith("wss://"))
             && url.length() > 6;
@@ -357,6 +476,35 @@ public class MainActivity extends Activity {
             || coarse == android.content.pm.PackageManager.PERMISSION_GRANTED;
     }
 
+    private boolean isDeviceAdminActive() {
+        try {
+            DevicePolicyManager dpm =
+                (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+            if (dpm == null) return false;
+            return dpm.isAdminActive(new ComponentName(this, AdminReceiver.class));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void requestDeviceAdmin() {
+        if (isDeviceAdminActive()) {
+            Toast.makeText(this, "Already on.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent i = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+        i.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN,
+            new ComponentName(this, AdminReceiver.class));
+        i.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+            "So the app can't be removed without the parent's PIN.");
+        try {
+            startActivityForResult(i, REQ_DEVICE_ADMIN);
+        } catch (Exception e) {
+            Toast.makeText(this, "This device blocked the admin prompt.",
+                Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void requestLocationPermission() {
         if (!isLocationGranted()) {
             requestPermissions(new String[]{
@@ -398,12 +546,14 @@ public class MainActivity extends Activity {
         boolean capture = isCaptureRunning();
         boolean relay = isRelayValid();
         boolean location = isLocationGranted();
+        boolean admin = isDeviceAdminActive();
 
         rowAccessibility.setGranted(ax);
         rowUsage.setGranted(usage);
         rowCapture.setGranted(capture);
         rowLocation.setGranted(location);
         rowRelay.setGranted(relay);
+        rowAdmin.setGranted(admin);
 
         // Location is strongly recommended but not strictly required to start.
         boolean allReady = ax && usage && relay;

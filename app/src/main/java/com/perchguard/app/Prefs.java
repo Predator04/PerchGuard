@@ -14,6 +14,10 @@ public final class Prefs {
     public static final String KEY_AUTH_TOKEN = "auth_token";
     public static final String DEFAULT_AUTH_TOKEN = BuildConfig.AUTH_TOKEN;
 
+    public static final String KEY_PARENT_PIN = "parent_pin";
+    public static final String KEY_SUSPEND_UNTIL = "suspend_until";
+    public static final String DEFAULT_PARENT_PIN = "1234";
+
     public static SharedPreferences get(Context ctx) {
         return ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE);
     }
@@ -32,6 +36,14 @@ public final class Prefs {
 
     public static void setAuthToken(Context ctx, String token) {
         get(ctx).edit().putString(KEY_AUTH_TOKEN, token).apply();
+    }
+
+    public static String parentPin(Context ctx) {
+        return get(ctx).getString(KEY_PARENT_PIN, DEFAULT_PARENT_PIN);
+    }
+
+    public static void setParentPin(Context ctx, String pin) {
+        get(ctx).edit().putString(KEY_PARENT_PIN, pin).apply();
     }
 
     private Prefs() {}

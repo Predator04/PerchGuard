@@ -89,11 +89,12 @@
 
     <h2 style="margin-top:14px;">Bedtime</h2>
     <div class="row">
-      <label class="kv">Start <input id="btStart" type="time"></label>
-      <label class="kv">End <input id="btEnd" type="time"></label>
+      <label class="kv">Start <input id="btStart" type="text" placeholder="8:00 PM" style="width:90px;"></label>
+      <label class="kv">End <input id="btEnd" type="text" placeholder="7:00 AM" style="width:90px;"></label>
       <label class="kv"><input id="btEnabled" type="checkbox"> enabled</label>
       <button id="saveBedtime">Save bedtime</button>
     </div>
+    <div id="btError" class="kv" style="color:#f4a3a3; min-height:1em;"></div>
 
     <h2 style="margin-top:14px;">Daily total</h2>
     <div class="row">
@@ -188,6 +189,33 @@ function connect() {
   ws.onerror = () => { try { ws.close(); } catch {} };
 }
 
+// --- 12-hour clock helpers (UI displays always in AM/PM; wire format stays 24h) ---
+const TIME_FMT = new Intl.DateTimeFormat("en-US",
+  { hour: "numeric", minute: "2-digit", hour12: true });
+function fmtTime(ts) {
+  return TIME_FMT.format(new Date(ts));
+}
+function to12h(hhmm) {
+  if (!hhmm) return "";
+  const m = String(hhmm).match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return "";
+  const h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+  if (isNaN(h) || isNaN(mi) || h < 0 || h > 23 || mi < 0 || mi > 59) return "";
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = ((h + 11) % 12) + 1;
+  return `${h12}:${String(mi).padStart(2, "0")} ${ampm}`;
+}
+function to24h(s) {
+  if (!s) return null;
+  const m = String(s).trim().toUpperCase().match(/^(\d{1,2}):(\d{2})\s*([AP])\.?M?\.?$/);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const mi = parseInt(m[2], 10);
+  if (h < 1 || h > 12 || mi < 0 || mi > 59) return null;
+  h = (h % 12) + (m[3] === "P" ? 12 : 0);
+  return `${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")}`;
+}
+
 function fmtAgo(ts) {
   if (!ts) return "";
   const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
@@ -225,7 +253,7 @@ function applyEvent(evt) {
 }
 
 function appendEvent(evt) {
-  const t = evt.t ? new Date(evt.t * 1000).toLocaleTimeString() : new Date().toLocaleTimeString();
+  const t = evt.t ? fmtTime(evt.t * 1000) : fmtTime(Date.now());
   const line = `[${t}] ${JSON.stringify(evt)}\n`;
   eventsEl.textContent = (line + eventsEl.textContent).slice(0, 8000);
 }
@@ -269,8 +297,8 @@ function renderPolicy() {
     row.appendChild(rmBtn);
     pkgsEl.appendChild(row);
   }
-  document.getElementById("btStart").value = (policy.bedtime && policy.bedtime.start) || "";
-  document.getElementById("btEnd").value = (policy.bedtime && policy.bedtime.end) || "";
+  document.getElementById("btStart").value = to12h((policy.bedtime && policy.bedtime.start) || "");
+  document.getElementById("btEnd").value = to12h((policy.bedtime && policy.bedtime.end) || "");
   document.getElementById("btEnabled").checked = !!(policy.bedtime && policy.bedtime.enabled);
   document.getElementById("totalMinutes").value = policy.total_minutes || 0;
 }
@@ -368,11 +396,20 @@ document.getElementById("addPkg").onclick = () => {
   document.getElementById("newLimit").value = "";
 };
 
-document.getElementById("saveBedtime").onclick = () => postJson("/api/action/bedtime", {
-  start: document.getElementById("btStart").value,
-  end: document.getElementById("btEnd").value,
-  enabled: document.getElementById("btEnabled").checked,
-});
+document.getElementById("saveBedtime").onclick = () => {
+  const errEl = document.getElementById("btError");
+  const start = to24h(document.getElementById("btStart").value);
+  const end   = to24h(document.getElementById("btEnd").value);
+  if (start === null || end === null) {
+    errEl.textContent = 'Use a time like "8:00 PM".';
+    return;
+  }
+  errEl.textContent = "";
+  postJson("/api/action/bedtime", {
+    start, end,
+    enabled: document.getElementById("btEnabled").checked,
+  });
+};
 
 document.getElementById("saveTotal").onclick = () => postJson("/api/action/limits", {
   packages: Object.fromEntries(Object.entries(policy.limits || {}).map(([k,v]) => [k, {daily_minutes:v}])),
